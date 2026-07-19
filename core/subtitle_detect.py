@@ -228,7 +228,7 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
     if segment_start is not None:
         attempt_starts = [segment_start]
     else:
-        attempt_starts = [skip_sec + i * 30 for i in range(max_attempts)]
+        attempt_starts = [skip_sec + i * 300 for i in range(max_attempts)]
     per_attempt_duration = 30
     frame_dir = os.path.join(temp_dir, f"ocr_sub{sub_stream_index}")
     os.makedirs(frame_dir, exist_ok=True)
