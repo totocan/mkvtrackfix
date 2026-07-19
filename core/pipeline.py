@@ -286,7 +286,8 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     L(f"    产地判断: 国产={movie_info['is_domestic']}, "
       f"原生语言={movie_info['native_lang_name']}({movie_info['native_lang']}), "
       f"来源={movie_info['source']}")
-    # v22: 缓存 TMDB 信息供重命名使用
+    # v22: 缓存 TMDB 信息供重命名使用（先清旧值，防止跨文件残留）
+    config.pop("_tmdb_movie_info", None)
     config["_tmdb_movie_info"] = movie_info
 
     # ---- 3a. 音轨提取（所有音轨一次性集中提取 WAV）----
