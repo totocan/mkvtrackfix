@@ -1,4 +1,53 @@
-# 电影音轨 / 字幕标签批量修复工具（v23） mkvtrackfix
+<div align="center">
+
+# 🎬 mkvtrackfix
+
+### 电影音轨 / 字幕标签批量修复工具
+
+**v23 正式版 · Powered by Faster-Whisper + RapidOCR-OpenVINO + MKVToolNix**
+
+<br>
+
+<!-- 主品牌徽章 -->
+<a href="../../releases"><img src="https://img.shields.io/badge/版本-v23-FF6B35?style=for-the-badge&logo=git&logoColor=white" alt="Version"/></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/许可-GPL--3.0-blue?style=for-the-badge&logo=gnu&logoColor=white" alt="License"/></a>
+<a href="#"><img src="https://img.shields.io/badge/SemVer-2.0.0-orange?style=for-the-badge&logo=semver&logoColor=white" alt="SemVer"/></a>
+<a href="#"><img src="https://img.shields.io/badge/状态-stable-success?style=for-the-badge&logo=checkmarx&logoColor=white" alt="Status"/></a>
+<a href="#"><img src="https://img.shields.io/badge/代码-black-000000?style=for-the-badge&logo=python&logoColor=white" alt="Code Style"/></a>
+
+<br>
+
+<!-- AI / ML 引擎（开源关联） -->
+<a href="https://github.com/SYSTRAN/faster-whisper"><img src="https://img.shields.io/badge/faster--whisper-CTranslate2-FF6B35?style=for-the-badge&logo=openai&logoColor=white" alt="faster-whisper"/></a>
+<a href="https://github.com/RapidAI/RapidOCR"><img src="https://img.shields.io/badge/RapidOCR-OpenVINO-0071C5?style=for-the-badge&logo=intel&logoColor=white" alt="RapidOCR"/></a>
+<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="https://img.shields.io/badge/ModelScope-魔搭-6242D5?style=for-the-badge" alt="ModelScope"/></a>
+<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="https://img.shields.io/badge/HuggingFace-🤗-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="HuggingFace"/></a>
+
+<br>
+
+<!-- 原生工具链 -->
+<a href="https://ffmpeg.org/"><img src="https://img.shields.io/badge/ffmpeg-音视频处理-007808?style=for-the-badge&logo=ffmpeg&logoColor=white" alt="ffmpeg"/></a>
+<a href="https://mkvtoolnix.download/"><img src="https://img.shields.io/badge/MKVToolNix-v100-1A1A1A?style=for-the-badge" alt="MKVToolNix"/></a>
+<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="https://img.shields.io/badge/PyQt5-GUI-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="PyQt5"/></a>
+<a href="https://www.themoviedb.org/"><img src="https://img.shields.io/badge/TMDB-开放数据-01B4E4?style=for-the-badge&logo=themoviedatabase&logoColor=white" alt="TMDB"/></a>
+<a href="https://github.com/giampaolo/psutil"><img src="https://img.shields.io/badge/psutil-系统监控-FFD43B?style=for-the-badge&logo=python&logoColor=blue" alt="psutil"/></a>
+
+<br>
+
+<!-- 运行环境 -->
+<a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11.9-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/></a>
+<a href="#"><img src="https://img.shields.io/badge/平台-Windows%2010%2F11-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"/></a>
+<a href="#"><img src="https://img.shields.io/badge/NAS-SMB%2FUNC-FFA500?style=for-the-badge" alt="NAS Support"/></a>
+<a href="#"><img src="https://img.shields.io/badge/依赖-pip%20install-3776AB?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"/></a>
+
+<br>
+
+[📥 下载便携版](../../releases) · [📝 更新日志](CHANGES.md) · [🐛 反馈问题](../../issues) · [⭐ Star](../../stargazers)
+
+</div>
+
+---
+
 - 批量修复 mp4 / mkv 电影的音轨与字幕语言标签，并把 mp4 重新封装为 mkv。
 - 支持 UNC 网络路径（NAS），带 GUI、AI 识别、非破坏式输出与干跑预览。
 
@@ -195,3 +244,68 @@ mediameta_fixer/
 | cmn-hant | cmn-hant | 繁体中文字幕（BCP 47） |
 
 > **🔒 兜底保护**：不在表中的任何语言码 → 自动降级为 `und`（未定义语言），保证 `mkvmerge` 绝不因语言码参数报错。
+
+---
+
+## 🙏 致谢与开源引用
+
+mkvtrackfix 完全构建于开源社区的肩膀之上，**v23** 版本涉及的核心项目如下（按依赖层级排序）：
+
+### 🤖 AI / 机器学习
+| 项目 | 用途 | 链接 |
+|:-----|:-----|:-----|
+| **faster-whisper** | 音轨语种 AI 识别（CTranslate2 推理引擎，无需 PyTorch） | [github.com/SYSTRAN/faster-whisper](https://github.com/SYSTRAN/faster-whisper) |
+| **CTranslate2** | faster-whisper 底层推理框架 | [github.com/OpenNMT/CTranslate2](https://github.com/OpenNMT/CTranslate2) |
+| **RapidOCR** | PGS 字幕 OCR 引擎 | [github.com/RapidAI/RapidOCR](https://github.com/RapidAI/RapidOCR) |
+| **OpenVINO** | RapidOCR 推理后端（Intel CPU 加速） | [github.com/openvinotoolkit/openvino](https://github.com/openvinotoolkit/openvino) |
+| **ONNX Runtime** | 跨平台模型推理 | [onnxruntime.ai](https://onnxruntime.ai/) |
+| **ModelScope 魔搭** | 国内 faster-whisper 模型镜像源 | [modelscope.cn](https://www.modelscope.cn/) |
+| **HuggingFace** | 国际 faster-whisper 模型镜像源 | [huggingface.co/Systran](https://huggingface.co/Systran) |
+
+### 🛠️ 原生工具链
+| 工具 | 用途 | 链接 |
+|:-----|:-----|:-----|
+| **FFmpeg** | 音轨/字幕提取、抽帧 | [ffmpeg.org](https://ffmpeg.org/) |
+| **MKVToolNix v100** | MKV 转封装（IETF BCP 47 直写） | [mkvtoolnix.download](https://mkvtoolnix.download/) |
+| **7-Zip (7za920)** | 解压 MKVToolNix 便携包 | [7-zip.org](https://www.7-zip.org/) |
+
+### 🐍 Python 生态
+| 库 | 版本 | 用途 |
+|:---|:----:|:-----|
+| **PyQt5** | ≥5.15 | 跨平台 GUI 框架 |
+| **psutil** | ≥5.9 | 系统资源监控（CPU/内存/网络/磁盘） |
+| **requests** | ≥2.31 | TMDB 查询、模型下载 |
+| **langdetect** | ≥1.0.9 | 文本字幕语种辅助判定 |
+| **modelscope** | 最新 | 国内模型下载（按需自动安装） |
+
+### 🌐 开放数据
+| 来源 | 用途 | 链接 |
+|:-----|:-----|:-----|
+| **TMDB** | 电影产地/语言查询（纯 HTML 解析，无需 API Key） | [themoviedb.org](https://www.themoviedb.org/) |
+
+> 💡 **关于模型**：默认从 **ModelScope 魔搭社区** 下载（国内更快），失败自动回退到 **HuggingFace**。一次下载永久离线，存放在 `models/<size>/` 目录。
+
+> 💡 **关于许可证**：本项目基于 **GPL-3.0** 开源；如需商用请遵守上游各依赖项目的许可证条款。
+
+---
+
+## 📦 第三方工具版本
+
+构建脚本 `build_portable.bat` 会自动下载下列便携工具：
+
+| 工具 | 发行版 | 下载源 |
+|:-----|:-------|:-------|
+| Python | 3.11.9 embed amd64 | python.org |
+| FFmpeg | latest essentials | gyan.dev |
+| MKVToolNix | 100.0 | mkvtoolnix.download |
+| 7-Zip | 9.20 (7za) | 7-zip.org |
+
+---
+
+<div align="center">
+
+如果这个项目对你有帮助，欢迎 ⭐ Star 支持一下！
+
+<sub>Made with ❤️ by totocan · Powered by open source</sub>
+
+</div>

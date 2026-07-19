@@ -1,5 +1,14 @@
 # MediaMetaFixer 变更说明
 
+## 📌 v23.1 (README 优化)
+
+### 📝 文档
+- **README 顶部徽章栏**：仿 RapidOCR 风格，使用 `for-the-badge` 样式展示版本 / 许可 / AI 引擎 / 原生工具 / 运行环境
+- **致谢章节**：新增「🙏 致谢与开源引用」表格，列出全部 AI 项目、原生工具、Python 库、开放数据源
+- **第三方工具版本表**：明确 `build_portable.bat` 自动下载的工具版本（Python 3.11.9 / FFmpeg / MKVToolNix v100 / 7-Zip 9.20）
+
+---
+
 ## 🎬 v23 正式版
 
 ### 🖼️ 托盘图标
