@@ -9,28 +9,28 @@
 <br>
 
 <!-- 主品牌徽章 -->
-<a href="../../releases"><img src="assets/badges/version.svg" alt="Version"/></a>
-<a href="LICENSE"><img src="assets/badges/license.svg" alt="License"/></a>
-<img src="assets/badges/semver.svg" alt="SemVer"/>
-<img src="assets/badges/status.svg" alt="Status"/>
-<img src="assets/badges/codestyle.svg" alt="Code Style"/>
+<a href="../../releases"><img src="assets/badges/version.svg" alt="Version v23"/></a>
+<a href="LICENSE"><img src="assets/badges/license.svg" alt="License GPL-3.0"/></a>
+<img src="assets/badges/semver.svg" alt="SemVer 2.0.0"/>
+<img src="assets/badges/status.svg" alt="Status stable"/>
+<img src="assets/badges/codestyle.svg" alt="Code style black"/>
 
 <br>
 
-<!-- AI / ML 引擎（开源关联） -->
-<a href="https://github.com/SYSTRAN/faster-whisper"><img src="assets/badges/whisper.svg" alt="faster-whisper"/></a>
-<a href="https://github.com/RapidAI/RapidOCR"><img src="assets/badges/rapidocr.svg" alt="RapidOCR"/></a>
-<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="assets/badges/modelscope.svg" alt="ModelScope"/></a>
-<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="assets/badges/huggingface.svg" alt="HuggingFace"/></a>
+<!-- AI / ML 引擎（开源关联，可点击） -->
+<a href="https://github.com/SYSTRAN/faster-whisper"><img src="assets/badges/whisper.svg" alt="faster-whisper (CTranslate2)" title="faster-whisper"/></a>
+<a href="https://github.com/RapidAI/RapidOCR"><img src="assets/badges/rapidocr.svg" alt="RapidOCR (OpenVINO)" title="RapidOCR"/></a>
+<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="assets/badges/modelscope.svg" alt="ModelScope 魔搭" title="ModelScope"/></a>
+<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="assets/badges/huggingface.svg" alt="HuggingFace Hub" title="HuggingFace"/></a>
 
 <br>
 
-<!-- 原生工具链 -->
-<a href="https://ffmpeg.org/"><img src="assets/badges/ffmpeg.svg" alt="ffmpeg"/></a>
-<a href="https://mkvtoolnix.download/"><img src="assets/badges/mkvtoolnix.svg" alt="MKVToolNix"/></a>
-<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="assets/badges/pyqt5.svg" alt="PyQt5"/></a>
-<a href="https://www.themoviedb.org/"><img src="assets/badges/tmdb.svg" alt="TMDB"/></a>
-<a href="https://github.com/giampaolo/psutil"><img src="assets/badges/psutil.svg" alt="psutil"/></a>
+<!-- 原生工具链（可点击主页） -->
+<a href="https://ffmpeg.org/"><img src="assets/badges/ffmpeg.svg" alt="ffmpeg" title="FFmpeg"/></a>
+<a href="https://mkvtoolnix.download/"><img src="assets/badges/mkvtoolnix.svg" alt="MKVToolNix" title="MKVToolNix"/></a>
+<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="assets/badges/pyqt5.svg" alt="PyQt5" title="PyQt5"/></a>
+<a href="https://www.themoviedb.org/"><img src="assets/badges/tmdb.svg" alt="TMDB" title="TMDB"/></a>
+<a href="https://github.com/giampaolo/psutil"><img src="assets/badges/psutil.svg" alt="psutil" title="psutil"/></a>
 
 <br>
 
@@ -38,7 +38,7 @@
 <a href="https://www.python.org/"><img src="assets/badges/python.svg" alt="Python"/></a>
 <img src="assets/badges/windows.svg" alt="Windows"/>
 <img src="assets/badges/nas.svg" alt="NAS Support"/>
-<img src="assets/badges/pypi.svg" alt="PyPI"/>
+<a href="https://pypi.org/"><img src="assets/badges/pypi.svg" alt="PyPI"/></a>
 
 <br>
 
