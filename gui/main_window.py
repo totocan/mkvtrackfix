@@ -50,21 +50,35 @@ def _log_path():
         return "N/A"
 
 
+def _format_duration(seconds):
+    """将秒数格式化为可读时间。>=60秒输出分秒。"""
+    if seconds >= 60:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m}分{s}秒"
+    return f"{int(seconds)}秒"
+
+
+def _is_unc_path(path):
+    """判断路径是否为 UNC 网络路径（以 \\\\ 或 // 开头）。"""
+    return path.startswith("\\\\") or path.startswith("//")
+
+
 # ---------------------------------------------------------------------------
 # Preloader: 后台异步预下载/缓存线程
 # ---------------------------------------------------------------------------
 class CacheManager:
     """
-    本地缓存管理器（重设计 v11）：
+    本地缓存管理器（v23 重设计）：
 
-    - 在程序根目录建立 tmp/，按任务列表序号建子目录 tmp/1/、tmp/2/、tmp/3/…
-    - 每个任务：**先**把对应视频整体缓存到 tmp/N/，**再**本地一次性抽离音轨/字幕，
-      全程复用本地文件，不反复走网络（解决旧实现"读字幕时又下载一次"的浪费）。
-    - 错峰调度（前1后1分时）：处理任务 N 时，后台等 3 秒后开始缓存任务 N+1。
-      **始终只比 worker 多缓存 1 个**——worker 推进后才预取下一个，避免一次性拉取所有
-      大视频把本地磁盘撑爆。
-    - 清理：完成任务 N 后清理 tmp/N/；全部完成后清理所有数字子目录，**保留 tmp/**。
+    - 仅在路径为 UNC 网络路径时启用（自动判度）
+    - 在程序根目录建立 tmp/，按任务列表序号建子目录 tmp/1/、tmp/2/…
+    - 预缓存窗口：最多缓存 4 个视频（含当前），处理当前时后台预拉取后续
+    - 等待机制：Worker 等待指定视频缓存就绪，输出等待时间
+    - 清理：每个视频处理完毕后立即清理 tmp/N/ 整个目录（含 temp 子目录）
     """
+    MAX_WINDOW = 4  # 最多同时缓存 4 个（含当前任务）
+
     def __init__(self, files, cache_root, log_callback):
         self.files = files
         self.cache_root = cache_root
@@ -73,8 +87,11 @@ class CacheManager:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._current_idx = -1     # worker 当前正在处理的任务下标（-1 = 未启动）
-        self._cached_up_to = -1   # 已经预拉取到的最高下标
+        self._cached_up_to = -1    # 已经预拉取到的最高下标
         self._thread = None
+
+        # 检查是否有 UNC 路径需要缓存
+        self.has_unc = any(_is_unc_path(f) for f in files)
 
     @property
     def current_idx(self):
@@ -91,7 +108,13 @@ class CacheManager:
         return os.path.join(self.cache_root, str(idx + 1),
                             os.path.basename(self.files[idx]))
 
+    def task_temp_dir(self, idx):
+        """任务 idx 对应的临时工作目录（temp 子目录）。"""
+        return os.path.join(self.cache_root, str(idx + 1), "temp")
+
     def start(self):
+        if not self.has_unc:
+            return  # 本地路径，无需缓存
         os.makedirs(self.cache_root, exist_ok=True)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -101,7 +124,7 @@ class CacheManager:
             self.log_callback(msg)
 
     def _preload_one(self, idx):
-        """预拉取一个文件（含错误处理）。"""
+        """预拉取一个文件。"""
         if idx < 0 or idx >= len(self.files):
             return
         f = self.files[idx]
@@ -137,24 +160,25 @@ class CacheManager:
                 pass
 
     def _run(self):
-        # 1) 启动时先预拉取第一个
-        self._preload_one(0)
-        if self._stop_event.is_set():
-            return
-        self._cached_up_to = 0
+        # 1) 启动时先缓存第一批（最多 4 个）
+        n = min(self.MAX_WINDOW, len(self.files))
+        for idx in range(n):
+            self._preload_one(idx)
+            if self._stop_event.is_set():
+                return
+        self._cached_up_to = n - 1
 
-        # 2) 循环：等 worker 推进到 i 后，再预拉取 i+1（始终只多缓存 1 个）
+        # 2) 循环：worker 推进后，预拉取后续文件，保持窗口 = 4
         while not self._stop_event.is_set():
             with self._lock:
                 curr = self._current_idx
-            target = curr + 1
+            target = curr + self.MAX_WINDOW  # 缓存当前+4
             if target >= len(self.files):
                 break
             if target <= self._cached_up_to:
-                # 已经预拉取过了，但 worker 还没追到，短暂等
                 time.sleep(0.2)
                 continue
-            # 错峰：缓存下一个前等 3 秒（避免和 worker 同时抢占带宽/硬盘）
+            # 错峰：预拉取前等 3 秒
             for _ in range(30):
                 if self._stop_event.is_set():
                     break
@@ -164,53 +188,56 @@ class CacheManager:
             self._preload_one(target)
             self._cached_up_to = target
 
-    def ensure(self, idx):
-        """阻塞等待 idx 缓存就绪；若后台过慢/失败，前台同步拷贝兜底。"""
+    def wait_until_ready(self, idx):
+        """阻塞等待 idx 缓存就绪，输出等待时间。返回本地缓存路径。"""
+        # 非 UNC 路径直接返回原始路径
+        if not self.has_unc:
+            return self.files[idx]
+
+        # 快速路径：已就绪
         with self._lock:
             if idx in self.ready:
                 return self.ready[idx]
-        local = self.local_path(idx)
-        if not os.path.exists(local):
-            try:
-                os.makedirs(os.path.dirname(local), exist_ok=True)
-                shutil.copy2(self.files[idx], local)
-            except Exception as e:
-                self._log(f"[缓存] 任务{idx + 1} 同步兜底失败: {e}")
-                return None
-        with self._lock:
-            self.ready[idx] = local
-        return local
 
-    def cleanup_before(self, idx):
-        """完成任务 idx(0-based) 后，清理上一任务(tmp/(idx)) 的缓存目录。"""
-        prev = os.path.join(self.cache_root, str(idx))
-        if os.path.isdir(prev):
+        start = time.time()
+        self._log(f"[缓存] 等待任务{idx + 1} 缓存就绪...")
+        while not self._stop_event.is_set():
+            with self._lock:
+                if idx in self.ready:
+                    elapsed = time.time() - start
+                    if elapsed >= 1:
+                        self._log(f"[缓存] 任务{idx + 1} 已就绪（等待{_format_duration(elapsed)}）")
+                    return self.ready[idx]
+            time.sleep(0.1)
+
+        # 被终止
+        return None
+
+    def cleanup_after(self, idx):
+        """完成任务 idx(0-based) 后，清理对应的缓存目录及所有临时文件。"""
+        if not self.has_unc:
+            return
+        target = os.path.join(self.cache_root, str(idx + 1))
+        if os.path.isdir(target):
             try:
-                shutil.rmtree(prev, ignore_errors=True)
-                self._log(f"[缓存] 已清理上一任务目录: {prev}")
+                shutil.rmtree(target, ignore_errors=True)
+                self._log(f"[缓存] 已清理任务{idx + 1} 目录: {target}")
             except Exception:
                 pass
 
     def cleanup_all(self):
-        """停止后台线程并清理所有数字子目录和临时文件，保留 tmp/ 本身。"""
+        """停止后台线程并清理所有数字子目录，保留 tmp/ 本身。"""
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
-        for name in os.listdir(self.cache_root):
-            fp = os.path.join(self.cache_root, name)
-            if os.path.isdir(fp) and name.isdigit():
-                try:
-                    shutil.rmtree(fp, ignore_errors=True)
-                except Exception:
-                    pass
-        # 清理临时文件目录 tmp/temp/
-        tempd = os.path.join(self.cache_root, "temp")
-        if os.path.isdir(tempd):
-            try:
-                shutil.rmtree(tempd, ignore_errors=True)
-                os.makedirs(tempd, exist_ok=True)
-            except Exception:
-                pass
+        if self.has_unc:
+            for name in os.listdir(self.cache_root):
+                fp = os.path.join(self.cache_root, name)
+                if os.path.isdir(fp) and name.isdigit():
+                    try:
+                        shutil.rmtree(fp, ignore_errors=True)
+                    except Exception:
+                        pass
         self._log("[缓存] 全部任务完成，已清理 tmp/ 子目录（保留 tmp/）")
 
 
@@ -291,23 +318,15 @@ class Worker(QThread):
                 return out_path
         return target
 
-    @staticmethod
-    def _clean_temp_dir(debug_mode=False):
-        """v21.2: 清空 tmp/temp/ 目录，为下一个任务做准备。调试模式跳过。"""
-        if debug_mode:
-            return
-        temp_dir = os.path.join(config_mod.app_root(), "tmp", "temp")
-        if os.path.isdir(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                os.makedirs(temp_dir, exist_ok=True)
-            except Exception:
-                pass
-
     def run(self):
         total = len(self.files)
-        # v22: 移除本地缓存，直读 NAS（2Gbps 内网，缓存因全量复制反而更慢）
-        self.cache = None
+        cache_root = os.path.join(config_mod.app_root(), "tmp")
+
+        # v23: 自动判度 — UNC 网络路径走缓存，本地盘符直读
+        self.cache = CacheManager(self.files, cache_root, self._log)
+        self.cache.start()
+        if self.cache.has_unc:
+            self.cache.current_idx = 0
 
         for i, f in enumerate(self.files):
             if self._stop:
@@ -315,11 +334,22 @@ class Worker(QThread):
                 break
             self.file_start.emit(i)
             try:
+                # 等待缓存就绪（非 UNC 路径立即返回原始路径）
+                local_path = self.cache.wait_until_ready(i)
+                if local_path is None:
+                    self.file_done.emit(i, "", "缓存失败，已取消", "error", "")
+                    break
+
+                # 每个任务独立临时目录
+                task_temp_dir = self.cache.task_temp_dir(i)
+                os.makedirs(task_temp_dir, exist_ok=True)
+
                 if self.mode == "scan":
                     self._log(f"分析: {f}")
                     tracks, _ = pipeline.analyze_file(
-                        f, self.cfg, log=lambda m, l="info": self._log(m, l),
-                        orig_path=f)
+                        local_path, self.cfg,
+                        log=lambda m, l="info": self._log(m, l),
+                        orig_path=f, temp_dir=task_temp_dir)
                     self.results[f] = tracks
                     # v22: 所有识别失败 → 跳过
                     if _any_track_failed(tracks):
@@ -346,13 +376,15 @@ class Worker(QThread):
                                 self._log(f"  转封装进度: {pct}%", "info")
                                 _last_pct[0] = pct
                         ok, out, msg, _ = pipeline.process_tracks(
-                            f, cached, run_cfg,
+                            local_path, cached, run_cfg,
                             log=lambda m, l="info": self._log(m, l),
-                            progress_callback=_on_remux_progress)
+                            progress_callback=_on_remux_progress,
+                            orig_path=f, temp_dir=task_temp_dir)
                     else:
                         ok, out, msg, tracks = pipeline.process_file(
-                            f, run_cfg,
-                            log=lambda m, l="info": self._log(m, l))
+                            local_path, run_cfg,
+                            log=lambda m, l="info": self._log(m, l),
+                            orig_path=f, temp_dir=task_temp_dir)
                         self.results[f] = tracks
                     out_path = out or ""
                     plan = fmt_plan(self.results[f])
@@ -360,8 +392,11 @@ class Worker(QThread):
                         i, plan, "完成" if ok else f"失败: {msg}",
                         "ok" if ok else "error", out_path or "")
 
-                # 完成当前文件后清理临时工作目录
-                self._clean_temp_dir(run_cfg.get("debug_mode", False))
+                # 完成当前文件：清理临时提取物 + 缓存目录
+                self.cache.cleanup_after(i)
+                # 通知后台线程 worker 已推进
+                if self.cache.has_unc:
+                    self.cache.current_idx = i + 1
 
             except Exception as e:
                 tb = traceback.format_exc()
@@ -375,9 +410,8 @@ class Worker(QThread):
 
             self.progress.emit(i + 1, total)
 
-        # 整个流程结束：清理所有缓存子目录，保留 tmp/
-        if self.cache:
-            self.cache.cleanup_all()
+        # 整个流程结束
+        self.cache.cleanup_all()
         self.finished.emit()
 
 
