@@ -248,7 +248,8 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
                 "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=1",
                 "-ss", str(ocr_seek), "-t", str(per_attempt_duration),
                 "-i", sub_input,
-                "-filter_complex", "[0:v][1:s]overlay=shortest=1",
+                "-filter_complex", "[0:v][1:s]overlay",
+                "-t", str(per_attempt_duration),
                 os.path.join(frame_dir, "frame_%04d.png")
             ]
         else:
@@ -259,7 +260,8 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
                 "-ss", str(ocr_seek), "-t", str(per_attempt_duration),
                 "-i", clean_src,
                 "-filter_complex",
-                f"[0:v][1:{sub_stream_index}]overlay=shortest=1",
+                f"[0:v][1:{sub_stream_index}]overlay",
+                "-t", str(per_attempt_duration),
                 os.path.join(frame_dir, "frame_%04d.png")
             ]
         _log_to_ai_worker(f"[OCR_EXEC] {' '.join(cmd)}")
@@ -365,10 +367,9 @@ def detect(track, src_path, temp_dir, config, orig_path=None, existing_file=None
                     "note": f"抽取失败且无法推断: {reason_brief}"}
 
     if is_image:
-        # 图像字幕：不从 .sup 文件渲染（ffmpeg 无法正确解析原始 PGS），
-        # 始终从视频源（src_path）按字幕流索引渲染帧
+        # 图像字幕：从提取的 .sup 文件渲染帧（[1:s] 绝对正确匹配字幕流）
         ocr_res = _ocr_with_tesseract(
-            src_path, track.stream_index, config, temp_dir, sub_path=None)
+            src_path, track.stream_index, config, temp_dir, sub_path=tmp_out)
         if ocr_res is None:
             text, script = None, "unknown"
         else:
