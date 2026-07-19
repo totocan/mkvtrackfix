@@ -1,0 +1,11 @@
+# 电影音轨/字幕标签修复工具 依赖
+# 安装：pip install -r requirements.txt
+# 另需单独安装原生程序（非 pip）：
+#   - mkvtoolnix  (提供 mkvmerge)        https://mkvtoolnix.download/
+
+faster-whisper>=1.0      # AI 语音/语言识别（基于 CTranslate2，无需 torch）
+langdetect>=1.0.9        # 文本字幕语种判定
+PyQt5>=5.15              # GUI
+requests>=2.31           # TMDB 查询、下载等
+psutil>=5.9              # 系统资源监控（CPU/内存/网络/磁盘）
+rapidocr-openvino         # OCR 识别（v22: 基于 Intel OpenVINO，轻量快速，替代 onnxruntime）
