@@ -213,24 +213,44 @@ class CacheManager:
         # 被终止
         return None
 
-    def cleanup_after(self, idx):
-        """完成任务 idx(0-based) 后，清理对应的缓存目录及所有临时文件。"""
+    def cleanup_after(self, idx, debug_mode=False):
+        """完成任务 idx(0-based) 后，清理对应的缓存目录及所有临时文件。
+
+        参数：
+          debug_mode — 调试模式时仅清理 temp/ 子目录，保留缓存视频文件
+        """
         if not self.has_unc:
             return
         target = os.path.join(self.cache_root, str(idx + 1))
-        if os.path.isdir(target):
+        if not os.path.isdir(target):
+            return
+        if debug_mode:
+            # 调试模式：只清理 temp 子目录，保留缓存视频文件供排查
+            temp_dir = os.path.join(target, "temp")
+            if os.path.isdir(temp_dir):
+                try:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    self._log(f"[缓存] 调试模式，已清理临时目录: {temp_dir}")
+                except Exception:
+                    pass
+        else:
+            # 非调试模式：整个目录清理
             try:
                 shutil.rmtree(target, ignore_errors=True)
                 self._log(f"[缓存] 已清理任务{idx + 1} 目录: {target}")
             except Exception:
                 pass
 
-    def cleanup_all(self):
-        """停止后台线程并清理所有数字子目录，保留 tmp/ 本身。"""
+    def cleanup_all(self, debug_mode=False):
+        """停止后台线程并清理所有数字子目录，保留 tmp/ 本身。
+
+        参数：
+          debug_mode — 调试模式时跳过清理（保留所有调试文件）
+        """
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
-        if self.has_unc:
+        if self.has_unc and not debug_mode:
             for name in os.listdir(self.cache_root):
                 fp = os.path.join(self.cache_root, name)
                 if os.path.isdir(fp) and name.isdigit():
@@ -238,7 +258,9 @@ class CacheManager:
                         shutil.rmtree(fp, ignore_errors=True)
                     except Exception:
                         pass
-        self._log("[缓存] 全部任务完成，已清理 tmp/ 子目录（保留 tmp/）")
+            self._log("[缓存] 全部任务完成，已清理 tmp/ 子目录（保留 tmp/）")
+        elif debug_mode:
+            self._log("[缓存] 调试模式，保留所有临时文件")
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +350,8 @@ class Worker(QThread):
         if self.cache.has_unc:
             self.cache.current_idx = 0
 
+        debug_mode = self.cfg.get("debug_mode", False)
+
         for i, f in enumerate(self.files):
             if self._stop:
                 self.file_done.emit(i, "", "已取消", "warn", "")
@@ -393,7 +417,7 @@ class Worker(QThread):
                         "ok" if ok else "error", out_path or "")
 
                 # 完成当前文件：清理临时提取物 + 缓存目录
-                self.cache.cleanup_after(i)
+                self.cache.cleanup_after(i, debug_mode=debug_mode)
                 # 通知后台线程 worker 已推进
                 if self.cache.has_unc:
                     self.cache.current_idx = i + 1
@@ -411,7 +435,7 @@ class Worker(QThread):
             self.progress.emit(i + 1, total)
 
         # 整个流程结束
-        self.cache.cleanup_all()
+        self.cache.cleanup_all(debug_mode=debug_mode)
         self.finished.emit()
 
 

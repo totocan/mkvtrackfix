@@ -331,7 +331,7 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     for t in tracks:
         if t.track_type == "subtitle" and t.track_id in sub_paths:
             res = subtitle_detect.detect_from_file(
-                t, sub_paths[t.track_id], temp_dir, config, orig_path=orig_path)
+                t, path, sub_paths[t.track_id], temp_dir, config, orig_path=orig_path)
             t.detected_iso = res.get("iso", "und")
             t.detected_name = res.get("zh", "未知")
             t.detected_kind = res.get("kind", "unknown")

@@ -365,9 +365,10 @@ def detect(track, src_path, temp_dir, config, orig_path=None, existing_file=None
                     "note": f"抽取失败且无法推断: {reason_brief}"}
 
     if is_image:
-        # 全帧单次提取 OCR（不使用 -ss 分段，避免跳跃段无字幕帧）
+        # 图像字幕：不从 .sup 文件渲染（ffmpeg 无法正确解析原始 PGS），
+        # 始终从视频源（src_path）按字幕流索引渲染帧
         ocr_res = _ocr_with_tesseract(
-            src_path, track.stream_index, config, temp_dir, sub_path=tmp_out)
+            src_path, track.stream_index, config, temp_dir, sub_path=None)
         if ocr_res is None:
             text, script = None, "unknown"
         else:
@@ -530,11 +531,19 @@ def extract_all(tracks, src_path, temp_dir, config):
         return {}
 
 
-def detect_from_file(track, extracted_path, temp_dir, config, orig_path=None):
+def detect_from_file(track, video_path, extracted_path, temp_dir, config, orig_path=None):
     """
     对已提取的字幕文件做 OCR + 语言检测。
+
+    参数：
+      track — 字幕轨道对象
+      video_path — 源视频路径（本地缓存），用于图像字幕的帧渲染
+      extracted_path — 已提取的字幕文件路径（跳过 mkvextract）
+      temp_dir  — 临时工作目录
+      config   — 配置字典
+      orig_path — NAS 原始路径，用于启发式推断
+
     返回与 detect() 相同的 dict。
-    通过 existing_file 参数跳过内部提取步骤。
     """
-    return detect(track, extracted_path, temp_dir, config,
+    return detect(track, video_path, temp_dir, config,
                   orig_path=orig_path, existing_file=extracted_path)
