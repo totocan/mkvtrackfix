@@ -387,6 +387,8 @@ class Worker(QThread):
                     self._log(f"处理: {f}")
                     run_cfg = dict(self.cfg_override)
                     run_cfg["output_overwrite"] = False
+                    # v23.8: 清除扫描阶段残留的 TMDB 缓存（处理阶段自动按文件名解析）
+                    run_cfg.pop("_tmdb_movie_info", None)
                     if f in self.results:
                         # v22: 跳过标记为 skip 的文件
                         cached = self.results[f]
@@ -434,7 +436,8 @@ class Worker(QThread):
 
             self.progress.emit(i + 1, total)
 
-        # 整个流程结束
+        # 整个流程结束：清理 config 中残留的 TMDB 缓存
+        self.cfg.pop("_tmdb_movie_info", None)
         self.cache.cleanup_all(debug_mode=debug_mode)
         self.finished.emit()
 
