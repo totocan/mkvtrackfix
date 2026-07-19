@@ -9,36 +9,36 @@
 <br>
 
 <!-- 主品牌徽章 -->
-<a href="../../releases"><img src="https://img.shields.io/badge/版本-v23-FF6B35?style=for-the-badge&logo=git&logoColor=white" alt="Version"/></a>
-<a href="LICENSE"><img src="https://img.shields.io/badge/许可-GPL--3.0-blue?style=for-the-badge&logo=gnu&logoColor=white" alt="License"/></a>
-<a href="#"><img src="https://img.shields.io/badge/SemVer-2.0.0-orange?style=for-the-badge&logo=semver&logoColor=white" alt="SemVer"/></a>
-<a href="#"><img src="https://img.shields.io/badge/状态-stable-success?style=for-the-badge&logo=checkmarx&logoColor=white" alt="Status"/></a>
-<a href="#"><img src="https://img.shields.io/badge/代码-black-000000?style=for-the-badge&logo=python&logoColor=white" alt="Code Style"/></a>
+<a href="../../releases"><img src="assets/badges/version.svg" alt="Version"/></a>
+<a href="LICENSE"><img src="assets/badges/license.svg" alt="License"/></a>
+<img src="assets/badges/semver.svg" alt="SemVer"/>
+<img src="assets/badges/status.svg" alt="Status"/>
+<img src="assets/badges/codestyle.svg" alt="Code Style"/>
 
 <br>
 
 <!-- AI / ML 引擎（开源关联） -->
-<a href="https://github.com/SYSTRAN/faster-whisper"><img src="https://img.shields.io/badge/faster--whisper-CTranslate2-FF6B35?style=for-the-badge&logo=openai&logoColor=white" alt="faster-whisper"/></a>
-<a href="https://github.com/RapidAI/RapidOCR"><img src="https://img.shields.io/badge/RapidOCR-OpenVINO-0071C5?style=for-the-badge&logo=intel&logoColor=white" alt="RapidOCR"/></a>
-<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="https://img.shields.io/badge/ModelScope-魔搭-6242D5?style=for-the-badge" alt="ModelScope"/></a>
-<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="https://img.shields.io/badge/HuggingFace-🤗-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black" alt="HuggingFace"/></a>
+<a href="https://github.com/SYSTRAN/faster-whisper"><img src="assets/badges/whisper.svg" alt="faster-whisper"/></a>
+<a href="https://github.com/RapidAI/RapidOCR"><img src="assets/badges/rapidocr.svg" alt="RapidOCR"/></a>
+<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="assets/badges/modelscope.svg" alt="ModelScope"/></a>
+<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="assets/badges/huggingface.svg" alt="HuggingFace"/></a>
 
 <br>
 
 <!-- 原生工具链 -->
-<a href="https://ffmpeg.org/"><img src="https://img.shields.io/badge/ffmpeg-音视频处理-007808?style=for-the-badge&logo=ffmpeg&logoColor=white" alt="ffmpeg"/></a>
-<a href="https://mkvtoolnix.download/"><img src="https://img.shields.io/badge/MKVToolNix-v100-1A1A1A?style=for-the-badge" alt="MKVToolNix"/></a>
-<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="https://img.shields.io/badge/PyQt5-GUI-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="PyQt5"/></a>
-<a href="https://www.themoviedb.org/"><img src="https://img.shields.io/badge/TMDB-开放数据-01B4E4?style=for-the-badge&logo=themoviedatabase&logoColor=white" alt="TMDB"/></a>
-<a href="https://github.com/giampaolo/psutil"><img src="https://img.shields.io/badge/psutil-系统监控-FFD43B?style=for-the-badge&logo=python&logoColor=blue" alt="psutil"/></a>
+<a href="https://ffmpeg.org/"><img src="assets/badges/ffmpeg.svg" alt="ffmpeg"/></a>
+<a href="https://mkvtoolnix.download/"><img src="assets/badges/mkvtoolnix.svg" alt="MKVToolNix"/></a>
+<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="assets/badges/pyqt5.svg" alt="PyQt5"/></a>
+<a href="https://www.themoviedb.org/"><img src="assets/badges/tmdb.svg" alt="TMDB"/></a>
+<a href="https://github.com/giampaolo/psutil"><img src="assets/badges/psutil.svg" alt="psutil"/></a>
 
 <br>
 
 <!-- 运行环境 -->
-<a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11.9-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/></a>
-<a href="#"><img src="https://img.shields.io/badge/平台-Windows%2010%2F11-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Windows"/></a>
-<a href="#"><img src="https://img.shields.io/badge/NAS-SMB%2FUNC-FFA500?style=for-the-badge" alt="NAS Support"/></a>
-<a href="#"><img src="https://img.shields.io/badge/依赖-pip%20install-3776AB?style=for-the-badge&logo=pypi&logoColor=white" alt="PyPI"/></a>
+<a href="https://www.python.org/"><img src="assets/badges/python.svg" alt="Python"/></a>
+<img src="assets/badges/windows.svg" alt="Windows"/>
+<img src="assets/badges/nas.svg" alt="NAS Support"/>
+<img src="assets/badges/pypi.svg" alt="PyPI"/>
 
 <br>
 

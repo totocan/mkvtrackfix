@@ -1,5 +1,17 @@
 # MediaMetaFixer 变更说明
 
+## 📌 v23.2 (本地徽章 + 仓库公开)
+
+### 🎨 README 徽章
+- **本地 SVG 徽章**：不再依赖 `shields.io`，将 20 个 `for-the-badge` 风格 SVG 生成并存放于 `assets/badges/`
+- **按功能分组**：品牌 / AI 引擎 / 原生工具链 / 运行环境，共 4 行
+- **全链路内嵌**：徽章图片通过相对路径引用，断网或国内外网络差异均可正常显示
+
+### 🏠 仓库设置
+- **仓库转为公开**：`totocan/mkvtrackfix` 已改为 Public，任何人可访问、Star、Fork
+
+---
+
 ## 📌 v23.1 (README 优化)
 
 ### 📝 文档

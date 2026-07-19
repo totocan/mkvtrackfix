@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="126" height="28" role="img" aria-label="NAS: SMB/UNC">
+  <title>NAS: SMB/UNC</title>
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#bbb" stop-opacity=".1"/>
+    <stop offset="1" stop-color="#333" stop-opacity=".1"/>
+  </linearGradient>
+  <clipPath id="r"><rect width="126" height="28" rx="4"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="46" height="28" fill="#555"/>
+    <rect x="46" width="80" height="28" fill="#FFA500"/>
+    <rect width="126" height="28" fill="url(#s)"/>
+  </g>
+  <g fill="#fff" text-anchor="start" font-family="Arial, Helvetica, sans-serif" font-size="11" font-weight="bold">
+    <text x="10" y="19">NAS</text>
+    <text x="58" y="19">SMB/UNC</text>
+  </g>
+</svg>
