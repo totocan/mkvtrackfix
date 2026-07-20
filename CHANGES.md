@@ -1,5 +1,27 @@
 # MediaMetaFixer 变更说明
 
+## 📌 v23.13 (缓存丢失自愈 + 单任务失败不卡死)
+
+### 🛡️ 修复（健壮性，严重）
+- **🐞 卡死根因**：`开始处理` 阶段某任务（如 2160p UHD 大文件）缓存因 NAS 网络抖动失败/丢失，
+  `ready[idx]` 标记缺失或指向已消失的 `tmp/N`，`wait_until_ready(idx)` 无限等待 → 整队卡在最后任务
+- **✅ 缓存丢失自愈**：`wait_until_ready` 增加**物理校验**——`ready[idx]` 指向文件必须真实存在且非空，
+  否则判定「缓存丢失」并主动 `_preload_one(idx)` **重新缓存一次**，让任务继续而非卡死
+- **✅ 预取失败重试**：`_preload_one` 内部失败**自动重试最多 3 次**（网络抖动自愈），
+  且只在 `local` 物理落盘成功后才写 `ready`，杜绝「标记就绪但文件残破」的中间态
+- **✅ 超时兜底**：`wait_until_ready` 按源文件大小估算超时阈值（每 GB 120s，夹在 300s~3600s），
+  超时返回 `None`，**Worker 跳过该单任务并继续后续**，不再 `break` 中断整队
+- **✅ 单任务失败隔离**：原 `wait_until_ready` 返回 `None` 时 `break` 全队 → 改为 `continue` 跳过单个任务，
+  73 任务里个别失败不影响其余（避免「动不动跳过几十个」的反面——卡死更糟）
+
+### 🔧 改动点
+- `_preload_one(self, idx, max_retry=3)`：重写，加大重试 + 完成落盘校验 + 半截文件清理
+- `wait_until_ready(self, idx, timeout_per_gb=120, max_timeout=3600)`：物理校验 + 缓存丢失重缓存 + 超时
+- `Worker.run()`：`wait_until_ready` 返回 `None` 时 `continue`（跳过单任务）替代 `break`（终止全队）
+- 清理逻辑与 v23.12 保持一致（WINDOW=3 滑窗，处理 N 清到 N-2）；`_run` 预取窗口 `curr+2` 与扫描阶段对齐，未改
+
+---
+
 ## 📌 v23.12 (缓存清理收紧 — 处理 N 必清到 N-2)
 
 ### 🧹 优化（缓存占用）

@@ -128,41 +128,69 @@ class CacheManager:
         if self.log_callback:
             self.log_callback(msg)
 
-    def _preload_one(self, idx):
-        """预拉取一个文件。"""
+    def _preload_one(self, idx, max_retry=3):
+        """预拉取一个文件（带失败重试 + 完整性校验）。
+
+        只有 local 物理文件确实存在且非空，才写入 ready[idx]；
+        否则视为未就绪（不写 ready），由 wait_until_ready 发现后重新缓存。
+        这样可避免「ready 标记就绪但 tmp/N 实际丢失」导致的任务卡死。
+        """
         if idx < 0 or idx >= len(self.files):
-            return
+            return False
         f = self.files[idx]
         local = self.local_path(idx)
         tmp = local + ".tmp"
-        try:
-            if os.path.exists(local):
-                with self._lock:
-                    self.ready[idx] = local
-                return
-            os.makedirs(os.path.dirname(local), exist_ok=True)
-            with open(f, "rb") as fsrc, open(tmp, "wb") as fdst:
-                while True:
-                    if self._stop_event.is_set():
-                        break
-                    buf = fsrc.read(4 * 1024 * 1024)
-                    if not buf:
-                        break
-                    fdst.write(buf)
-            if os.path.exists(tmp):
-                if os.path.exists(local):
-                    os.remove(local)
-                os.rename(tmp, local)
-            with self._lock:
-                self.ready[idx] = local
-            self._log(f"[缓存] 任务{idx + 1} 已就绪: {os.path.basename(f)}")
-        except Exception as e:
-            self._log(f"[缓存] 任务{idx + 1} 失败: {e}")
+        for attempt in range(1, max_retry + 1):
             try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except Exception:
-                pass
+                if os.path.exists(local) and os.path.getsize(local) > 0:
+                    with self._lock:
+                        self.ready[idx] = local
+                    return True
+                # 清掉可能残破的半截文件，确保从头完整拉取
+                for p in (local, tmp):
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception:
+                        pass
+                os.makedirs(os.path.dirname(local), exist_ok=True)
+                with open(f, "rb") as fsrc, open(tmp, "wb") as fdst:
+                    while True:
+                        if self._stop_event.is_set():
+                            break
+                        buf = fsrc.read(4 * 1024 * 1024)
+                        if not buf:
+                            break
+                        fdst.write(buf)
+                if self._stop_event.is_set():
+                    break
+                if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
+                    os.rename(tmp, local)
+                # 最终校验：local 必须存在且非空
+                if os.path.exists(local) and os.path.getsize(local) > 0:
+                    with self._lock:
+                        self.ready[idx] = local
+                    if attempt > 1:
+                        self._log(f"[缓存] 任务{idx + 1} 第{attempt}次重试成功: {os.path.basename(f)}")
+                    return True
+                # 文件落盘校验失败，进重试
+            except Exception as e:
+                try:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+                except Exception:
+                    pass
+                try:
+                    if os.path.exists(local) and os.path.getsize(local) == 0:
+                        os.remove(local)
+                except Exception:
+                    pass
+                if attempt < max_retry:
+                    self._log(f"[缓存] 任务{idx + 1} 预取失败(第{attempt}次)，重试: {e}")
+                else:
+                    self._log(f"[缓存] 任务{idx + 1} 预取失败(已重试{max_retry}次): {e}")
+        # 所有重试耗尽仍未就绪：明确不写 ready，让 wait_until_ready 感知
+        return False
 
     def _run(self):
         # 1) 启动时先缓存第一批（最多 WINDOW 个）
@@ -198,27 +226,60 @@ class CacheManager:
             self._preload_one(target)
             self._preload_idx = target
 
-    def wait_until_ready(self, idx):
-        """阻塞等待 idx 缓存就绪，输出等待时间。返回本地缓存路径。"""
+    def wait_until_ready(self, idx, timeout_per_gb=120, max_timeout=3600):
+        """阻塞等待 idx 缓存就绪，输出等待时间。返回本地缓存路径。
+
+        增强（v23.13）：
+        - 物理校验：ready[idx] 指向的文件必须真实存在且非空，否则视为
+          「缓存丢失」，主动触发一次重缓存（_preload_one 内部已带重试），
+          避免 ready 标记就绪但 tmp/N 实际消失导致任务卡死/失败。
+        - 超时兜底：等待超过阈值（按源文件大小估算，最少 5 分钟，最多
+          max_timeout）仍未就绪，返回 None，由 Worker 跳过该任务而非卡死全队。
+        """
         # 非 UNC 路径直接返回原始路径
         if not self.has_unc:
             return self.files[idx]
 
-        # 快速路径：已就绪
-        with self._lock:
-            if idx in self.ready:
-                return self.ready[idx]
+        def _phys_ok(p):
+            try:
+                return bool(p) and os.path.exists(p) and os.path.getsize(p) > 0
+            except Exception:
+                return False
+
+        # 超时阈值：按源文件大小估算（每 GB 给 timeout_per_gb 秒），夹在 [300, max_timeout]
+        try:
+            size_gb = os.path.getsize(self.files[idx]) / (1024 ** 3)
+        except Exception:
+            size_gb = 0
+        timeout = max(300, min(max_timeout, int(size_gb * timeout_per_gb) + 300))
 
         start = time.time()
-        self._log(f"[缓存] 等待任务{idx + 1} 缓存就绪...")
+        recovered = False
         while not self._stop_event.is_set():
             with self._lock:
-                if idx in self.ready:
-                    elapsed = time.time() - start
-                    if elapsed >= 1:
-                        self._log(f"[缓存] 任务{idx + 1} 已就绪（等待{_format_duration(elapsed)}）")
-                    return self.ready[idx]
-            time.sleep(0.1)
+                path = self.ready.get(idx)
+            # 物理校验：标记就绪但文件丢了 → 缓存丢失，触发重缓存一次
+            if path is not None and not _phys_ok(path):
+                with self._lock:
+                    self.ready.pop(idx, None)
+                self._log(f"[缓存] 任务{idx + 1} 缓存丢失（tmp 目录不存在），重新缓存一次...")
+                if self._preload_one(idx):
+                    recovered = True
+                else:
+                    self._log(f"[缓存] 任务{idx + 1} 重缓存失败，等待超时后将跳过")
+            # 就绪且物理存在 → 返回
+            with self._lock:
+                path = self.ready.get(idx)
+            if _phys_ok(path):
+                elapsed = time.time() - start
+                if elapsed >= 1 or recovered:
+                    self._log(f"[缓存] 任务{idx + 1} 已就绪（等待{_format_duration(elapsed)}）{'，已重缓存' if recovered else ''}")
+                return path
+            # 超时兜底：避免单任务卡死整队
+            if time.time() - start > timeout:
+                self._log(f"[缓存] 任务{idx + 1} 等待超时（{_format_duration(timeout)}），将跳过以避免卡死")
+                return None
+            time.sleep(0.3)
 
         # 被终止
         return None
@@ -396,8 +457,11 @@ class Worker(QThread):
                 # 等待缓存就绪（非 UNC 路径立即返回原始路径）
                 local_path = self.cache.wait_until_ready(i)
                 if local_path is None:
-                    self.file_done.emit(i, "", "缓存失败，已取消", "error", "")
-                    break
+                    # 单个任务缓存失败：跳过本任务并继续后续，避免整队卡死
+                    self._log(f"[缓存] 任务{i + 1} 缓存失败，跳过该任务继续后续", "error")
+                    self.file_done.emit(i, "", "缓存失败，已跳过", "error", "")
+                    self.cache.on_task_done(i, debug_mode=debug_mode)
+                    continue
 
                 # 每个任务独立临时目录
                 task_temp_dir = self.cache.task_temp_dir(i)
