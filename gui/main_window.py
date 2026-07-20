@@ -69,15 +69,19 @@ def _is_unc_path(path):
 # ---------------------------------------------------------------------------
 class CacheManager:
     """
-    本地缓存管理器（v23 重设计）：
+    本地缓存管理器（v23 滑动窗口重设计）：
 
     - 仅在路径为 UNC 网络路径时启用（自动判度）
     - 在程序根目录建立 tmp/，按任务列表序号建子目录 tmp/1/、tmp/2/…
-    - 预缓存窗口：最多缓存 4 个视频（含当前），处理当前时后台预拉取后续
+    - 滑动窗口预缓存：始终预拉取「当前任务 + 2 个向前」（WINDOW=3）
+      worker 推进到任务 N 时，后台线程目标推进到 N+2，任务 N+3 不再预取
+      由 current_idx 作为唯一权威，杜绝「预取的目录被误清」竞态
     - 等待机制：Worker 等待指定视频缓存就绪，输出等待时间
-    - 清理：每个视频处理完毕后立即清理 tmp/N/ 整个目录（含 temp 子目录）
+    - 清理（滑窗）：任务 N 完成后，仅清理 idx < current_idx - WINDOW 的目录，
+      即窗口之外的「已彻底处理完」目录，窗口内/正在预取的目录绝不误删
+    - 调试模式下清理只删 temp/ 子目录，保留缓存视频便于排查
     """
-    MAX_WINDOW = 4  # 最多同时缓存 4 个（含当前任务）
+    WINDOW = 3  # 滑动窗口：始终预缓存「当前 + 2 个向前」（共 3 个）
 
     def __init__(self, files, cache_root, log_callback):
         self.files = files
@@ -87,7 +91,7 @@ class CacheManager:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._current_idx = -1     # worker 当前正在处理的任务下标（-1 = 未启动）
-        self._cached_up_to = -1    # 已经预拉取到的最高下标
+        self._preload_idx = -1     # 后台线程已预拉取的最高下标
         self._thread = None
 
         # 检查是否有 UNC 路径需要缓存
@@ -160,25 +164,30 @@ class CacheManager:
                 pass
 
     def _run(self):
-        # 1) 启动时先缓存第一批（最多 4 个）
-        n = min(self.MAX_WINDOW, len(self.files))
+        # 1) 启动时先缓存第一批（最多 WINDOW 个）
+        n = min(self.WINDOW, len(self.files))
         for idx in range(n):
             self._preload_one(idx)
             if self._stop_event.is_set():
                 return
-        self._cached_up_to = n - 1
+        self._preload_idx = n - 1
 
-        # 2) 循环：worker 推进后，预拉取后续文件，保持窗口 = 4
+        # 2) 循环：以 current_idx 为唯一权威，维护滑动窗口 = WINDOW
+        #    目标预取下标 = curr + WINDOW - 1（当前 + 2 向前）
         while not self._stop_event.is_set():
             with self._lock:
                 curr = self._current_idx
-            target = curr + self.MAX_WINDOW  # 缓存当前+4
-            if target >= len(self.files):
-                break
-            if target <= self._cached_up_to:
+            if curr < 0:
                 time.sleep(0.2)
                 continue
-            # 错峰：预拉取前等 3 秒
+            target = curr + self.WINDOW - 1
+            if target >= len(self.files):
+                break
+            with self._lock:
+                if target <= self._preload_idx:
+                    time.sleep(0.2)
+                    continue
+            # 错峰：预拉取前等 3 秒，避免与当前任务抢带宽
             for _ in range(30):
                 if self._stop_event.is_set():
                     break
@@ -186,7 +195,7 @@ class CacheManager:
             if self._stop_event.is_set():
                 break
             self._preload_one(target)
-            self._cached_up_to = target
+            self._preload_idx = target
 
     def wait_until_ready(self, idx):
         """阻塞等待 idx 缓存就绪，输出等待时间。返回本地缓存路径。"""
@@ -213,33 +222,53 @@ class CacheManager:
         # 被终止
         return None
 
-    def cleanup_after(self, idx, debug_mode=False):
-        """完成任务 idx(0-based) 后，清理对应的缓存目录及所有临时文件。
+    def mark_processing(self, idx):
+        """Worker 真正开始处理任务 idx 前调用，加锁置 current_idx。
+
+        后台预取线程据此把预取目标推进到 idx + WINDOW - 1，
+        当前窗口外的目录才允许清理，杜绝误删正在预取的目录。
+        """
+        with self._lock:
+            self._current_idx = idx
+
+    def on_task_done(self, idx, debug_mode=False):
+        """任务 idx(0-based) 完成后调用：
+        1) 加锁推进 current_idx = idx + 1（通知后台线程滑窗前进）
+        2) 滑窗清理：删除所有 idx < current_idx - WINDOW 的数字目录
+           窗口内（含正在预取）和当前窗口边缘的目录一律保留
 
         参数：
           debug_mode — 调试模式时仅清理 temp/ 子目录，保留缓存视频文件
         """
         if not self.has_unc:
             return
-        target = os.path.join(self.cache_root, str(idx + 1))
-        if not os.path.isdir(target):
-            return
-        if debug_mode:
-            # 调试模式：只清理 temp 子目录，保留缓存视频文件供排查
-            temp_dir = os.path.join(target, "temp")
-            if os.path.isdir(temp_dir):
-                try:
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    self._log(f"[缓存] 调试模式，已清理临时目录: {temp_dir}")
-                except Exception:
-                    pass
-        else:
-            # 非调试模式：整个目录清理
-            try:
-                shutil.rmtree(target, ignore_errors=True)
-                self._log(f"[缓存] 已清理任务{idx + 1} 目录: {target}")
-            except Exception:
-                pass
+        with self._lock:
+            self._current_idx = idx + 1
+            cleanup_threshold = self._current_idx - self.WINDOW
+            for name in os.listdir(self.cache_root):
+                if not (name.isdigit()):
+                    continue
+                d_idx = int(name) - 1
+                if d_idx >= cleanup_threshold:
+                    continue  # 仍在窗口内，保留
+                target = os.path.join(self.cache_root, name)
+                if not os.path.isdir(target):
+                    continue
+                if debug_mode:
+                    # 调试模式：只清 temp 子目录，保留缓存视频
+                    temp_dir = os.path.join(target, "temp")
+                    if os.path.isdir(temp_dir):
+                        try:
+                            shutil.rmtree(temp_dir, ignore_errors=True)
+                            self._log(f"[缓存] 调试模式，已清理临时目录: {temp_dir}")
+                        except Exception:
+                            pass
+                else:
+                    try:
+                        shutil.rmtree(target, ignore_errors=True)
+                        self._log(f"[缓存] 已清理任务{name} 目录: {target}")
+                    except Exception:
+                        pass
 
     def cleanup_all(self, debug_mode=False):
         """停止后台线程并清理所有数字子目录，保留 tmp/ 本身。
@@ -358,6 +387,9 @@ class Worker(QThread):
                 break
             self.file_start.emit(i)
             try:
+                # 通知缓存管理器：worker 即将处理任务 i（滑窗推进依据）
+                if self.cache.has_unc:
+                    self.cache.mark_processing(i)
                 # 等待缓存就绪（非 UNC 路径立即返回原始路径）
                 local_path = self.cache.wait_until_ready(i)
                 if local_path is None:
@@ -418,11 +450,8 @@ class Worker(QThread):
                         i, plan, "完成" if ok else f"失败: {msg}",
                         "ok" if ok else "error", out_path or "")
 
-                # 完成当前文件：清理临时提取物 + 缓存目录
-                self.cache.cleanup_after(i, debug_mode=debug_mode)
-                # 通知后台线程 worker 已推进
-                if self.cache.has_unc:
-                    self.cache.current_idx = i + 1
+                # 完成任务 i：滑窗推进 + 清理窗口外目录（加锁，杜绝竞态误删）
+                self.cache.on_task_done(i, debug_mode=debug_mode)
 
             except Exception as e:
                 tb = traceback.format_exc()

@@ -1,5 +1,47 @@
 # MediaMetaFixer 变更说明
 
+## 📌 v23.11 (缓存滑窗状态机 — 修复竞态误删)
+
+### 🛡️ 修复（严重）
+- **🐞 缓存竞态误删**：原 `MAX_WINDOW=4` 设计在 73 文件长列表中，后台预取线程已缓存任务 5 的 `tmp/5/`，而 Worker 的 `cleanup_after(4)` 无条件 `rmtree` 整个 `tmp/N/` 会把**正在预取的任务 5 目录误删**，导致任务 5 等待一个已被删的缓存卡死
+- **✅ 改为 `current_idx` 权威 + 滑动窗口（WINDOW=3）状态机**：
+  - 后台预取仅推进到 `curr + WINDOW - 1`（当前 + 2 向前），任务 `curr+3` 不再预取
+  - 新增 `mark_processing(i)`：Worker 处理任务前加锁置 `current_idx`，后台线程据此滑动窗口
+  - `on_task_done(i)` 替代 `cleanup_after(i)`：加锁将 `current_idx` 推进到 `i+1`，**仅清理 `idx < current_idx - WINDOW` 的窗口外目录**，窗口内/正在预取目录绝不被删
+  - 清理与预取受同一把锁保护，竞态根除
+
+### 🔧 重构
+- `CacheManager.MAX_WINDOW=4` → `WINDOW=3`
+- `_run()` 预取目标 `curr + MAX_WINDOW` → `curr + WINDOW - 1`，去掉启动期一次性预取 4 个的激进策略
+- `cleanup_after(i)` → `on_task_done(i)`（滑窗清理，保留调试模式 `temp/` 局部清理语义）
+- `Worker.run()` 在每个任务处理前调用 `mark_processing(i)`，完成后调用 `on_task_done(i)`
+
+---
+
+## 📌 v23.10 (TMDB 缓存隔离)
+
+### 🐛 修复
+- **`analyze_file` 设置 TMDB 信息前清旧值**：`core/pipeline.py` 在写入 `_tmdb_movie_info` 前先 `pop` 旧值，避免共享 config 对象上的残留值串到下一个文件
+
+---
+
+## 📌 v23.9 (修复 TMDB 缓存串文件)
+
+### 🐛 修复
+- **🐞 多文件命名混乱根因**：扫描阶段 `analyze_file` 把 `_tmdb_movie_info` 写入共享 `cfg` 对象，最后文件的 TMDB 信息覆盖前面所有文件，导致 4 个文件输出同名（如全变「马路天使」）
+- **✅ 修复**：`Worker.run()` 处理循环中 `pop("_tmdb_movie_info")` 让 `smart_rename` 按文件名独立解析；整个流程结束再 `cfg.pop()` 清理，防止影响下次操作
+
+---
+
+## 📌 v23.8 (内测声明)
+
+### 📝 文档
+- **README 新增「⚠️ 内测声明」**：明确非破坏式输出原则、推荐测试目录先验证、不承担责任等条款
+- **版本标识改为 `v23 · Active Development`**
+- **状态徽章 `stable` → `beta`**（橙色 `#E8960C`）
+
+---
+
 ## 📌 v23.7 (移除空目录创建)
 
 ### ♻️ 清理
