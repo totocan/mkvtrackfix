@@ -396,6 +396,11 @@ class Worker(QThread):
             success = True
             try:
                 if self.mode == "scan":
+                    # v23.17: 导入记录后扫描模式也跳过已完成的文件
+                    if self.skip_done_paths and f in self.skip_done_paths:
+                        self.file_done.emit(
+                            i, "", "已完成(自动跳过)", "ok", "")
+                        continue
                     self._log(f"分析: {f}")
                     tracks, _ = pipeline.analyze_file(
                         f, self.cfg, log=lambda m, l="info": self._log(m, l),
@@ -853,8 +858,8 @@ class MainWindow(QMainWindow):
         label = "扫描预览" if mode == "scan" else "处理"
         self.log.log(f"任务开始: {self._task_start.strftime('%H:%M:%S')}", "info")
         cfg_override = getattr(self, 'worker_cfg_override', None)
-        # v23.16: 处理模式传入已完成集合，导入记录后自动跳过
-        skip = set(self._completed.keys()) if mode == "process" else None
+        # v23.17: 扫描/处理模式均支持断点续传 —— 导入记录后自动跳过已完成
+        skip = set(self._completed.keys()) if mode in ("process", "scan") else None
         self.worker = Worker(self.files, self.results, self.cfg, mode,
                              cfg_override=cfg_override, skip_done_paths=skip)
         self.worker.log.connect(self.log.log)
