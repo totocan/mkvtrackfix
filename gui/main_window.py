@@ -64,7 +64,7 @@ class CacheManager:
     - 滑动窗口清理：完成任务 N 后清理 N-2（保留当前 + 前 1 个）。
     - 磁盘感知：失败快照按时间排序，磁盘不足时删旧留新。
     """
-    def __init__(self, files, cache_root, log_callback):
+    def __init__(self, files, cache_root, log_callback, skip_paths=None):
         self.files = files
         self.cache_root = cache_root
         self.log_callback = log_callback
@@ -74,6 +74,8 @@ class CacheManager:
         self._current_idx = -1     # worker 当前正在处理的任务下标（-1 = 未启动）
         self._cached_up_to = -1   # 已经预拉取到的最高下标
         self._thread = None
+        # v23.20: 跳过已完成的文件，不浪费预缓存
+        self._skip_set = set(skip_paths or [])
 
     @property
     def current_idx(self):
@@ -101,8 +103,11 @@ class CacheManager:
             self.log_callback(msg)
 
     def _preload_one(self, idx):
-        """预拉取一个文件（含错误处理）。"""
+        """预拉取一个文件（含错误处理）。跳过已完成文件的缓存。"""
         if idx < 0 or idx >= len(self.files):
+            return
+        # v23.20: 跳过已完成的文件（断点续传场景，不浪费预缓存）
+        if idx < len(self.files) and self.files[idx] in self._skip_set:
             return
         f = self.files[idx]
         local = self.local_path(idx)
@@ -432,8 +437,10 @@ class Worker(QThread):
         # v23.18: 恢复本地缓存架构 —— 预缓存整片到 tmp/N/，直读本地避免反复走 NAS
         from core import config as _cfg
         tmp_root = os.path.join(_cfg.app_root(), "tmp")
+        # v23.20: 传入已完成集合，背景缓存线程跳过这些文件，不浪费硬盘
         self.cache = CacheManager(self.files, tmp_root,
-                                   lambda m: self._log(m, "cache"))
+                                   lambda m: self._log(m, "cache"),
+                                   skip_paths=self.skip_done_paths)
         self.cache.start()
         # v23.15: 启动前清掉历史残留
         self._purge_stale_temp_on_start()
@@ -449,6 +456,7 @@ class Worker(QThread):
                 if self.mode == "scan":
                     # v23.17: 导入记录后扫描模式也跳过已完成的文件
                     if self.skip_done_paths and f in self.skip_done_paths:
+                        self._log(f"跳过(已分析): {f}")
                         self.file_done.emit(
                             i, "", "已完成(自动跳过)", "ok", "")
                         continue
