@@ -414,15 +414,16 @@ class Worker(QThread):
 
     @staticmethod
     def _purge_stale_temp_on_start():
-        """启动处理前清掉历史残留（tmp/temp/ 与 tmp/debug_last/），避免堆积。"""
+        """启动处理前清掉历史残留（tmp/temp/、tmp/debug_last/、tmp/N/），避免堆积。"""
         try:
             from core import config as _cfg
             tmp_root = os.path.join(_cfg.app_root(), "tmp")
-            for sub in ("temp", "debug_last"):
+            # v23.19: 也清理 v23.18 引入的 tmp/N/ 数字子目录，防止旧损坏缓存被误用
+            for sub in os.listdir(tmp_root):
                 d = os.path.join(tmp_root, sub)
                 if os.path.isdir(d):
                     shutil.rmtree(d, ignore_errors=True)
-                os.makedirs(d, exist_ok=True)
+            os.makedirs(os.path.join(tmp_root, "temp"), exist_ok=True)
         except Exception:
             pass
 
@@ -1256,7 +1257,9 @@ class MainWindow(QMainWindow):
                 tracks.append(t)
             loaded_results[orig] = tracks
             saved_status[orig] = fe.get("status", "")
-            if fe.get("done"):
+            # v23.19: 兼容老记录——若 done 未设但 status 是「已分析」也视为完成
+            is_done = fe.get("done") or ("已分析" in fe.get("status", ""))
+            if is_done:
                 done_map[orig] = (fe.get("status", "已完成"), "ok")
         self.files = loaded_files
         self.results = loaded_results
