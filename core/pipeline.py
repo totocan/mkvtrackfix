@@ -247,15 +247,11 @@ def _auto_resolve_paths(path, orig_path):
 def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     """解析 + 产地判断 + 识别 + 策略，返回 (tracks, summary)。不写盘。
 
-    v23: 支持外部传入 temp_dir（每个视频各自的 tmp/N/temp/）；
-         字幕轨道一次性批量提取，只读一次源文件。
-
-    参数:
-      path     — 源视频路径（走缓存时为本地缓存路径，不走缓存时为原始路径）
-      config   — 配置字典
-      log      — 日志回调
-      orig_path — 原始路径（NAS/网络），用于产地判断和启发式推断
-      temp_dir  — 临时工作目录（每个视频独立，由调用者创建）
+    v21.2: 改用 tmp/temp/ 作为工作目录；
+           音轨三段分批提取完成后统一 AI 识别、投票；
+           字幕逐个 OCR，图像字幕抽帧后先采样再 OCR。
+    v23.18: 支持传入 task-specific 的 temp_dir（如 tmp/1/temp/），
+            默认回退到 tmp/temp/ 保持兼容。
     """
     def L(m, level="info"):
         if log:
@@ -270,7 +266,7 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     # 1. 轨道解析
     tracks = probe.probe_media(path)
     
-    # 临时工作目录：优先使用外部传入的，否则用默认的 tmp/temp/
+    # v23.18: 使用传入的 temp_dir，否则回退到 tmp/temp/
     if temp_dir is None:
         from . import config as cfg_mod
         temp_dir = os.path.join(cfg_mod.app_root(), "tmp", "temp")
@@ -286,11 +282,10 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     L(f"    产地判断: 国产={movie_info['is_domestic']}, "
       f"原生语言={movie_info['native_lang_name']}({movie_info['native_lang']}), "
       f"来源={movie_info['source']}")
-    # v22: 缓存 TMDB 信息供重命名使用（先清旧值，防止跨文件残留）
-    config.pop("_tmdb_movie_info", None)
+    # v22: 缓存 TMDB 信息供重命名使用
     config["_tmdb_movie_info"] = movie_info
 
-    # ---- 3a. 音轨提取（所有音轨一次性集中提取 WAV）----
+    # ---- 3a. 音轨提取（所有音轨一次性集中提取 WAV，仅跑一次 NAS）----
     infer_path = display_path
     audio_wavs = {}  # track_id -> [(start, wav_path), ...]
     for t in tracks:
@@ -301,22 +296,16 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
                 if wavs:
                     audio_wavs[t.track_id] = wavs
 
-    # ---- 3b. 字幕提取（一次性批量提取，只读一次源文件）----
-    sub_paths = subtitle_detect.extract_all(tracks, path, temp_dir, config)
-    if sub_paths:
-        for tid, sp in sub_paths.items():
-            L(f"    字幕#{tid} 已提取: {os.path.basename(sp)}")
-    else:
-        # 批量提取失败，逐条回退
-        L(f"    批量提取失败，逐条回退", "warn")
-        for t in tracks:
-            if t.track_type == "subtitle":
-                sub_path = subtitle_detect.extract_only(t, path, temp_dir, config)
-                if sub_path:
-                    sub_paths[t.track_id] = sub_path
-                    L(f"    字幕#{t.track_id} 已提取: {os.path.basename(sub_path)}")
-                else:
-                    L(f"    字幕#{t.track_id} 提取失败", "warn")
+    # ---- 3b. 字幕提取（所有字幕一次性集中提取，仅跑一次 NAS）----
+    sub_paths = {}
+    for t in tracks:
+        if t.track_type == "subtitle":
+            sub_path = subtitle_detect.extract_only(t, path, temp_dir, config)
+            if sub_path:
+                sub_paths[t.track_id] = sub_path
+                L(f"    字幕#{t.track_id} 已提取: {os.path.basename(sub_path)}")
+            else:
+                L(f"    字幕#{t.track_id} 提取失败", "warn")
 
     # ---- 3c. 音轨 AI 检测（全本地，零 NAS）----
     for t in tracks:
@@ -332,7 +321,7 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     for t in tracks:
         if t.track_type == "subtitle" and t.track_id in sub_paths:
             res = subtitle_detect.detect_from_file(
-                t, path, sub_paths[t.track_id], temp_dir, config, orig_path=orig_path)
+                t, sub_paths[t.track_id], temp_dir, config, orig_path=orig_path)
             t.detected_iso = res.get("iso", "und")
             t.detected_name = res.get("zh", "未知")
             t.detected_kind = res.get("kind", "unknown")
@@ -383,7 +372,8 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
     return tracks, probe.summarize(tracks)
 
 
-def process_file(path, config, log=None, orig_path=None, progress_callback=None, temp_dir=None):
+def process_file(path, config, log=None, orig_path=None, progress_callback=None,
+                  temp_dir=None):
     """分析并执行转封装。返回 (ok, out_path, msg, tracks)。"""
     def L(m, level="info"):
         if log:
@@ -394,13 +384,12 @@ def process_file(path, config, log=None, orig_path=None, progress_callback=None,
     
     # 1. 分析文件
     L(f"分析+处理: {display_path}")
-    tracks, _ = analyze_file(path, config, log, orig_path=orig_path, temp_dir=temp_dir)
+    tracks, _ = analyze_file(path, config, log, orig_path=orig_path,
+                              temp_dir=temp_dir)
     
     # 2. 执行转封装
     try:
-        ok, out, msg = remux.remux(tracks, path, config, log=log,
-                                    progress_callback=progress_callback,
-                                    orig_path=orig_path)
+        ok, out, msg = remux.remux(tracks, path, config, log=log, progress_callback=progress_callback)
     except TypeError:
         ok, out, msg = remux.remux(tracks, path, config, log=log)
         if orig_path and os.path.exists(out):
@@ -418,7 +407,7 @@ def process_file(path, config, log=None, orig_path=None, progress_callback=None,
     return ok, out, msg, tracks
 
 
-def process_tracks(path, tracks, config, log=None, orig_path=None, progress_callback=None, temp_dir=None):
+def process_tracks(path, tracks, config, log=None, orig_path=None, progress_callback=None):
     """已有分析结果时直接转封装（跳过重新识别）。"""
     def L(m, level="info"):
         if log:
@@ -429,9 +418,7 @@ def process_tracks(path, tracks, config, log=None, orig_path=None, progress_call
     L(f"处理(已有结果): {display_path}")
     
     try:
-        ok, out, msg = remux.remux(tracks, path, config, log=log,
-                                    progress_callback=progress_callback,
-                                    orig_path=orig_path)
+        ok, out, msg = remux.remux(tracks, path, config, log=log, progress_callback=progress_callback)
     except TypeError:
         ok, out, msg = remux.remux(tracks, path, config, log=log)
         if orig_path and os.path.exists(out):

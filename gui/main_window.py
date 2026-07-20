@@ -55,15 +55,14 @@ def _log_path():
 # ---------------------------------------------------------------------------
 class CacheManager:
     """
-    本地缓存管理器（重设计 v11）：
+    本地缓存管理器（重设计 v11，v23.18 恢复）:
 
     - 在程序根目录建立 tmp/，按任务列表序号建子目录 tmp/1/、tmp/2/、tmp/3/…
     - 每个任务：**先**把对应视频整体缓存到 tmp/N/，**再**本地一次性抽离音轨/字幕，
       全程复用本地文件，不反复走网络（解决旧实现"读字幕时又下载一次"的浪费）。
-    - 错峰调度（前1后1分时）：处理任务 N 时，后台等 3 秒后开始缓存任务 N+1。
-      **始终只比 worker 多缓存 1 个**——worker 推进后才预取下一个，避免一次性拉取所有
-      大视频把本地磁盘撑爆。
-    - 清理：完成任务 N 后清理 tmp/N/；全部完成后清理所有数字子目录，**保留 tmp/**。
+    - 预缓存提前 2 个：任务 N 开始时，确保 N+1、N+2 均已缓存。
+    - 滑动窗口清理：完成任务 N 后清理 N-2（保留当前 + 前 1 个）。
+    - 磁盘感知：失败快照按时间排序，磁盘不足时删旧留新。
     """
     def __init__(self, files, cache_root, log_callback):
         self.files = files
@@ -143,26 +142,23 @@ class CacheManager:
             return
         self._cached_up_to = 0
 
-        # 2) 循环：等 worker 推进到 i 后，再预拉取 i+1（始终只多缓存 1 个）
+        # 2) 循环：worker 推进后，确保当前下标后 2 个都已缓存
         while not self._stop_event.is_set():
             with self._lock:
                 curr = self._current_idx
-            target = curr + 1
-            if target >= len(self.files):
+            # 至少提前缓存 2 个：确保 curr+1, curr+2 就绪
+            target_min = curr + 2
+            if target_min >= len(self.files):
                 break
-            if target <= self._cached_up_to:
-                # 已经预拉取过了，但 worker 还没追到，短暂等
-                time.sleep(0.2)
-                continue
-            # 错峰：缓存下一个前等 3 秒（避免和 worker 同时抢占带宽/硬盘）
-            for _ in range(30):
+            # 从当前已缓存的上限逐步拉到 target_min
+            while self._cached_up_to < target_min and self._cached_up_to + 1 < len(self.files):
+                nxt = self._cached_up_to + 1
+                self._preload_one(nxt)
+                self._cached_up_to = nxt
                 if self._stop_event.is_set():
-                    break
-                time.sleep(0.1)
-            if self._stop_event.is_set():
-                break
-            self._preload_one(target)
-            self._cached_up_to = target
+                    return
+            # 错峰：等 worker 继续推进
+            time.sleep(0.5)
 
     def ensure(self, idx):
         """阻塞等待 idx 缓存就绪；若后台过慢/失败，前台同步拷贝兜底。"""
@@ -212,6 +208,53 @@ class CacheManager:
             except Exception:
                 pass
         self._log("[缓存] 全部任务完成，已清理 tmp/ 子目录（保留 tmp/）")
+
+    # ------------------------------------------------------------------
+    # v23.18: 滑动窗口 + 磁盘感知快照清理
+    # ------------------------------------------------------------------
+    def cleanup_sliding(self, idx_0based):
+        """完成任务 idx(0-based) 后，保留当前 + 前 1 个，清理更早的缓存目录。
+
+        语义示例（1-based）：
+          - 任务 1 完成：不清理（无更早的）
+          - 任务 2 完成：不清理（只到 1）
+          - 任务 3 完成：清理 tmp/1/
+          - 任务 4 完成：清理 tmp/2/
+        """
+        keep = {idx_0based, idx_0based - 1}
+        for name in os.listdir(self.cache_root):
+            if not name.isdigit():
+                continue
+            n = int(name) - 1  # 1-based → 0-based
+            if n not in keep:
+                try:
+                    shutil.rmtree(os.path.join(self.cache_root, name),
+                                  ignore_errors=True)
+                except Exception:
+                    pass
+
+    def cleanup_failure_snapshots(self, min_free_gb=5):
+        """磁盘不足时逐步清理失败快照目录（非数字目录），保留最新的一个。"""
+        try:
+            usage = shutil.disk_usage(self.cache_root)
+            free_gb = usage.free / (1024 ** 3)
+        except Exception:
+            return
+        if free_gb >= min_free_gb:
+            return
+        # 收集所有快照目录（非数字目录），按 mtime 排序
+        snapshots = []
+        for name in os.listdir(self.cache_root):
+            d = os.path.join(self.cache_root, name)
+            if os.path.isdir(d) and not name.isdigit():
+                snapshots.append((os.path.getmtime(d), d))
+        snapshots.sort()  # 最旧在前
+        for _, d in snapshots[:-1]:  # 保留最新的
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+                self._log(f"[缓存] 磁盘不足({free_gb:.1f}GB)，已清理旧快照: {d}")
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -295,16 +338,7 @@ class Worker(QThread):
 
     # ------------------------------------------------------------------
     # v23.15: 任务级临时目录滑动窗口清理
-    #   调试模式的本意是“保留当前任务的中间产物供排查”，但旧实现写成了
-    #   “所有任务产物永久保留、跨任务不清理”，导致 73 个任务把 C 盘打满
-    #   （[Errno 28] No space left on device）。
-    #   新语义：
-    #     - 成功 / 跳过任务：无论是否调试，立即清理 tmp/temp/；
-    #       若此前保留了某个失败任务的快照(tmp/debug_last)，一并回收。
-    #     - 失败 / 异常任务 + 调试模式：把当前 tmp/temp/ 整目录移栽到
-    #       tmp/debug_last/ 作为快照（先清空旧快照，保证最多只留 1 个）。
-    #     - 失败 / 异常任务 + 非调试：直接清理 tmp/temp/。
-    #   即“滑动窗口”：始终最多保留最近一个失败任务的产物，磁盘占用有硬上限。
+    # v23.18: 适配 tmp/N/ 架构 —— 快照功能直接操作当前任务的 tmp/{i+1}/ 目录
     # ------------------------------------------------------------------
     def _cleanup_dir_children(self, d):
         """删除目录 d 下的所有条目，但保留目录 d 本身。"""
@@ -320,15 +354,20 @@ class Worker(QThread):
             except Exception:
                 pass
 
-    def _post_task_cleanup(self, debug_mode=False, success=True):
-        """任务结束后的临时目录滑动窗口清理。"""
+    def _post_task_cleanup(self, debug_mode=False, success=True, task_idx=None):
+        """任务结束后的临时目录滑动窗口清理。
+
+        v23.18 中滑动窗口由 CacheManager.cleanup_sliding 负责，
+        本方法仅处理旧版 tmp/temp/ 残留 + 调试快照。
+        task_idx (0-based)：失败+调试时将该任务的 tmp/{i+1}/ 移栽到 debug_last/。
+        """
         from core import config as _cfg
         tmp_root = os.path.join(_cfg.app_root(), "tmp")
         temp_dir = os.path.join(tmp_root, "temp")
         debug_last = os.path.join(tmp_root, "debug_last")
 
         if success:
-            # 成功/跳过：立即清理 tmp/temp/；并回收上一次失败快照（滑动窗口）
+            # 成功/跳过：清理旧版 tmp/temp/ 残留；回收上一次失败快照
             self._cleanup_dir_children(temp_dir)
             if os.path.isdir(debug_last):
                 try:
@@ -342,13 +381,21 @@ class Worker(QThread):
             self._cleanup_dir_children(temp_dir)
             return
 
-        # 调试模式：保留本次失败产物为快照（先清旧快照，保证最多 1 个）
+        # 调试模式：保留本次失败产物为快照
         try:
             if os.path.isdir(debug_last):
                 shutil.rmtree(debug_last, ignore_errors=True)
-            if os.path.isdir(temp_dir):
+            # v23.18: 优先使用任务级目录 tmp/{i+1}/
+            snap_src = None
+            if task_idx is not None:
+                snap_src = os.path.join(tmp_root, str(task_idx + 1))
+            if snap_src and os.path.isdir(snap_src):
                 os.makedirs(debug_last, exist_ok=True)
-                # 移栽 tmp/temp/ 下所有内容到 tmp/debug_last/
+                shutil.move(snap_src, os.path.join(debug_last, str(task_idx + 1)))
+                self._log(f"[调试] 已保留任务{task_idx + 1}快照到 tmp/debug_last/")
+            elif os.path.isdir(temp_dir):
+                # 兼容：无任务级目录时使用旧 tmp/temp/
+                os.makedirs(debug_last, exist_ok=True)
                 moved = False
                 for name in os.listdir(temp_dir):
                     src = os.path.join(temp_dir, name)
@@ -362,7 +409,6 @@ class Worker(QThread):
                     self._log("[调试] 已保留失败任务中间产物到 tmp/debug_last/ 供排查")
         except Exception:
             pass
-        # 确保 temp 目录仍存在，供后续任务使用
         os.makedirs(temp_dir, exist_ok=True)
 
     @staticmethod
@@ -381,10 +427,13 @@ class Worker(QThread):
 
     def run(self):
         total = len(self.files)
-        # v22: 移除本地缓存，直读 NAS（2Gbps 内网，缓存因全量复制反而更慢）
-        self.cache = None
-        # v23.15: 启动前清掉历史残留，避免上一次运行（尤其是调试模式）留下的
-        # tmp/temp/ 与 tmp/debug_last/ 堆积物继续占用磁盘
+        # v23.18: 恢复本地缓存架构 —— 预缓存整片到 tmp/N/，直读本地避免反复走 NAS
+        from core import config as _cfg
+        tmp_root = os.path.join(_cfg.app_root(), "tmp")
+        self.cache = CacheManager(self.files, tmp_root,
+                                   lambda m: self._log(m, "cache"))
+        self.cache.start()
+        # v23.15: 启动前清掉历史残留
         self._purge_stale_temp_on_start()
         debug_mode = bool(self.cfg_override.get("debug_mode", False))
 
@@ -401,10 +450,15 @@ class Worker(QThread):
                         self.file_done.emit(
                             i, "", "已完成(自动跳过)", "ok", "")
                         continue
+                    # v23.18: 使用本地缓存 + 任务级 temp 目录
+                    local = self.cache.ensure(i)
+                    src = local if local else f
+                    task_tmp = os.path.join(tmp_root, str(i + 1), "temp")
+                    os.makedirs(task_tmp, exist_ok=True)
                     self._log(f"分析: {f}")
                     tracks, _ = pipeline.analyze_file(
-                        f, self.cfg, log=lambda m, l="info": self._log(m, l),
-                        orig_path=f)
+                        src, self.cfg, log=lambda m, l="info": self._log(m, l),
+                        orig_path=f, temp_dir=task_tmp)
                     self.results[f] = tracks
                     # v22: 所有识别失败 → 跳过
                     if _any_track_failed(tracks):
@@ -420,11 +474,13 @@ class Worker(QThread):
                         self.file_done.emit(
                             i, "", "已完成(自动跳过)", "ok", "")
                         continue
+                    # v23.18: 使用本地缓存
+                    local = self.cache.ensure(i)
+                    src = local if local else f
                     self._log(f"处理: {f}")
                     run_cfg = dict(self.cfg_override)
                     run_cfg["output_overwrite"] = False
                     if f in self.results:
-                        # v22: 跳过标记为 skip 的文件
                         cached = self.results[f]
                         if all(getattr(t, "action", "keep") == "skip"
                                for t in cached if t.track_type in ("audio", "subtitle")):
@@ -436,15 +492,16 @@ class Worker(QThread):
                                 self._log(f"  转封装进度: {pct}%", "info")
                                 _last_pct[0] = pct
                         ok, out, msg, _ = pipeline.process_tracks(
-                            f, cached, run_cfg,
+                            src, cached, run_cfg,
                             log=lambda m, l="info": self._log(m, l),
                             progress_callback=_on_remux_progress)
                     else:
                         ok, out, msg, tracks = pipeline.process_file(
-                            f, run_cfg,
+                            src, run_cfg,
                             log=lambda m, l="info": self._log(m, l))
                         self.results[f] = tracks
-                    out_path = out or ""
+                    # v23.18: 输出在 tmp/N/ 中，搬回 NAS 原始目录
+                    out_path = self._relocate_output(f, out or "")
                     plan = fmt_plan(self.results[f])
                     self.file_done.emit(
                         i, plan, "完成" if ok else f"失败: {msg}",
@@ -461,15 +518,17 @@ class Worker(QThread):
                 self._log(f"[异常] 文件 {os.path.basename(f)}:\n{tb}", "error")
                 self.file_done.emit(i, "", f"异常: {e}", "error", "")
             finally:
-                # v23.15: 任务级滑动窗口清理（成功即清；失败+调试保留为快照）
-                self._post_task_cleanup(debug_mode, success)
+                # v23.18: 滑动窗口清理 + 磁盘感知快照清理
+                self.cache.cleanup_sliding(i)
+                self.cache.cleanup_failure_snapshots(min_free_gb=5)
+                # v23.15/v23.18: 旧版 tmp/temp/ 残留清理 + 失败快照
+                self._post_task_cleanup(debug_mode, success, task_idx=i)
 
             self.progress.emit(i + 1, total)
 
-        # 整个流程结束：清理所有缓存子目录（成功清理 + 失败快照一并回收），保留 tmp/
+        # 整个流程结束：彻底清理
         self._post_task_cleanup(debug_mode, success=True)
-        if self.cache:
-            self.cache.cleanup_all()
+        self.cache.cleanup_all()
         self.finished.emit()
 
 
