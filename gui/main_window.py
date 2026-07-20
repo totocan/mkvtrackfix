@@ -77,8 +77,9 @@ class CacheManager:
       worker 推进到任务 N 时，后台线程目标推进到 N+2，任务 N+3 不再预取
       由 current_idx 作为唯一权威，杜绝「预取的目录被误清」竞态
     - 等待机制：Worker 等待指定视频缓存就绪，输出等待时间
-    - 清理（滑窗）：任务 N 完成后，仅清理 idx < current_idx - WINDOW 的目录，
-      即窗口之外的「已彻底处理完」目录，窗口内/正在预取的目录绝不误删
+    - 清理（滑窗）：任务 N 完成后，清理 idx < current_idx - (WINDOW-1) 的目录，
+      即至少清理到 N-2（含 N-2），仅保留 N-1、N 两个目录；
+      清理边界(<=N-2)与预取目标(>=N)间隔充分，正处理/正在预取的目录绝不误删
     - 调试模式下清理只删 temp/ 子目录，保留缓存视频便于排查
     """
     WINDOW = 3  # 滑动窗口：始终预缓存「当前 + 2 个向前」（共 3 个）
@@ -234,8 +235,10 @@ class CacheManager:
     def on_task_done(self, idx, debug_mode=False):
         """任务 idx(0-based) 完成后调用：
         1) 加锁推进 current_idx = idx + 1（通知后台线程滑窗前进）
-        2) 滑窗清理：删除所有 idx < current_idx - WINDOW 的数字目录
-           窗口内（含正在预取）和当前窗口边缘的目录一律保留
+        2) 滑窗清理：删除所有 d_idx < current_idx - (WINDOW - 1) 的数字目录
+           即处理任务 N 完成时至少清理到 N-2（含 N-2），仅保留 N-1、N
+           两个目录；预取目标始终在 curr + WINDOW - 1（= N+2）之外，
+           清理边界(<=N-2)与预取目标(>=N)间隔 >=4，绝无误删竞态
 
         参数：
           debug_mode — 调试模式时仅清理 temp/ 子目录，保留缓存视频文件
@@ -244,13 +247,13 @@ class CacheManager:
             return
         with self._lock:
             self._current_idx = idx + 1
-            cleanup_threshold = self._current_idx - self.WINDOW
+            cleanup_threshold = self._current_idx - (self.WINDOW - 1)
             for name in os.listdir(self.cache_root):
                 if not (name.isdigit()):
                     continue
                 d_idx = int(name) - 1
                 if d_idx >= cleanup_threshold:
-                    continue  # 仍在窗口内，保留
+                    continue  # 仍在窗口内（N-1、N），保留
                 target = os.path.join(self.cache_root, name)
                 if not os.path.isdir(target):
                     continue
