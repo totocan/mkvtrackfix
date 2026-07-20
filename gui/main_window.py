@@ -455,13 +455,13 @@ class Worker(QThread):
         # v23.20: 传入已完成集合，背景缓存线程跳过这些文件，不浪费硬盘
         # v23.21: 传入 keep_ocr_frames 配置，开启时滑动窗口保留 temp/ 子目录
         keep_temp = bool(self.cfg_override.get("keep_ocr_frames", False))
+        # v23.15: 启动前先清掉历史残留（含 tmp/N/），再启动缓存线程
+        self._purge_stale_temp_on_start()
         self.cache = CacheManager(self.files, tmp_root,
                                    lambda m: self._log(m, "cache"),
                                    skip_paths=self.skip_done_paths,
                                    keep_temp=keep_temp)
         self.cache.start()
-        # v23.15: 启动前清掉历史残留
-        self._purge_stale_temp_on_start()
         debug_mode = bool(self.cfg_override.get("debug_mode", False))
 
         for i, f in enumerate(self.files):
@@ -474,7 +474,7 @@ class Worker(QThread):
                 if self.mode == "scan":
                     # v23.17: 导入记录后扫描模式也跳过已完成的文件
                     if self.skip_done_paths and f in self.skip_done_paths:
-                        self._log(f"跳过(已分析): {f}")
+                        self._log(f"跳过(已分析): {os.path.basename(f)}")
                         self.file_done.emit(
                             i, "", "已完成(自动跳过)", "ok", "")
                         continue
