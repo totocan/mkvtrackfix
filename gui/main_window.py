@@ -86,9 +86,10 @@ class CacheManager:
             self._current_idx = val
 
     def local_path(self, idx):
-        """任务 idx(0-based) 对应的本地缓存文件路径。"""
-        return os.path.join(self.cache_root, str(idx + 1),
-                            os.path.basename(self.files[idx]))
+        """任务 idx(0-based) 对应的本地缓存文件路径。替换空格为下划线避免命令行工具解析问题。"""
+        base = os.path.basename(self.files[idx])
+        safe = base.replace(" ", "_")
+        return os.path.join(self.cache_root, str(idx + 1), safe)
 
     def start(self):
         os.makedirs(self.cache_root, exist_ok=True)
@@ -1198,8 +1199,8 @@ class MainWindow(QMainWindow):
                         "name": t.track_name or t.detected_name or "",
                         "note": getattr(t, "note", "") or "",
                     })
-            # 已完成：状态含「完成」且非 error
-            done = ("完成" in status) and ("失败" not in status)
+            # 已完成：扫描「已分析」或处理「完成」且非失败
+            done = (("完成" in status) or ("已分析" in status)) and ("失败" not in status)
             data["files"].append({
                 "path": f,
                 "status": status,
