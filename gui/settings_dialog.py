@@ -202,6 +202,9 @@ class SettingsDialog(QDialog):
         self.bx_debug = QCheckBox(
             "调试模式（保留临时文件供排查：WAV/OCR截图等，不自动清理）")
         f5.addRow(self.bx_debug)
+        self.bx_keep_ocr = QCheckBox(
+            "保留OCR帧（滑动窗口只删视频缓存，保留OCR截图/音轨WAV供排查）")
+        f5.addRow(self.bx_keep_ocr)
         root.addWidget(g5)
 
         # —— 按钮 ——
@@ -320,6 +323,7 @@ class SettingsDialog(QDialog):
         self.le_suffix.setEnabled(not c.get("smart_rename", True))
         self.bx_verbose.setChecked(c.get("verbose_tools", False))
         self.bx_debug.setChecked(c.get("debug_mode", False))
+        self.bx_keep_ocr.setChecked(c.get("keep_ocr_frames", False))
 
     def accept(self):
         try:
@@ -361,6 +365,7 @@ class SettingsDialog(QDialog):
             c["output_suffix"] = self.le_suffix.text().strip() or ".fixed"
             c["verbose_tools"] = self.bx_verbose.isChecked()
             c["debug_mode"] = self.bx_debug.isChecked()
+            c["keep_ocr_frames"] = self.bx_keep_ocr.isChecked()
             # 持久化
             config_mod.save(c)
             # 应用字体到当前窗口（即时生效）
