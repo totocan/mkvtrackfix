@@ -50,40 +50,21 @@ def _log_path():
         return "N/A"
 
 
-def _format_duration(seconds):
-    """将秒数格式化为可读时间。>=60秒输出分秒。"""
-    if seconds >= 60:
-        m = int(seconds // 60)
-        s = int(seconds % 60)
-        return f"{m}分{s}秒"
-    return f"{int(seconds)}秒"
-
-
-def _is_unc_path(path):
-    """判断路径是否为 UNC 网络路径（以 \\\\ 或 // 开头）。"""
-    return path.startswith("\\\\") or path.startswith("//")
-
-
 # ---------------------------------------------------------------------------
 # Preloader: 后台异步预下载/缓存线程
 # ---------------------------------------------------------------------------
 class CacheManager:
     """
-    本地缓存管理器（v23 滑动窗口重设计）：
+    本地缓存管理器（重设计 v11）：
 
-    - 仅在路径为 UNC 网络路径时启用（自动判度）
-    - 在程序根目录建立 tmp/，按任务列表序号建子目录 tmp/1/、tmp/2/…
-    - 滑动窗口预缓存：始终预拉取「当前任务 + 2 个向前」（WINDOW=3）
-      worker 推进到任务 N 时，后台线程目标推进到 N+2，任务 N+3 不再预取
-      由 current_idx 作为唯一权威，杜绝「预取的目录被误清」竞态
-    - 等待机制：Worker 等待指定视频缓存就绪，输出等待时间
-    - 清理（滑窗）：任务 N 完成后，清理 idx < current_idx - (WINDOW-1) 的目录，
-      即至少清理到 N-2（含 N-2），仅保留 N-1、N 两个目录；
-      清理边界(<=N-2)与预取目标(>=N)间隔充分，正处理/正在预取的目录绝不误删
-    - 调试模式下清理只删 temp/ 子目录，保留缓存视频便于排查
+    - 在程序根目录建立 tmp/，按任务列表序号建子目录 tmp/1/、tmp/2/、tmp/3/…
+    - 每个任务：**先**把对应视频整体缓存到 tmp/N/，**再**本地一次性抽离音轨/字幕，
+      全程复用本地文件，不反复走网络（解决旧实现"读字幕时又下载一次"的浪费）。
+    - 错峰调度（前1后1分时）：处理任务 N 时，后台等 3 秒后开始缓存任务 N+1。
+      **始终只比 worker 多缓存 1 个**——worker 推进后才预取下一个，避免一次性拉取所有
+      大视频把本地磁盘撑爆。
+    - 清理：完成任务 N 后清理 tmp/N/；全部完成后清理所有数字子目录，**保留 tmp/**。
     """
-    WINDOW = 3  # 滑动窗口：始终预缓存「当前 + 2 个向前」（共 3 个）
-
     def __init__(self, files, cache_root, log_callback):
         self.files = files
         self.cache_root = cache_root
@@ -92,11 +73,8 @@ class CacheManager:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._current_idx = -1     # worker 当前正在处理的任务下标（-1 = 未启动）
-        self._preload_idx = -1     # 后台线程已预拉取的最高下标
+        self._cached_up_to = -1   # 已经预拉取到的最高下标
         self._thread = None
-
-        # 检查是否有 UNC 路径需要缓存
-        self.has_unc = any(_is_unc_path(f) for f in files)
 
     @property
     def current_idx(self):
@@ -113,13 +91,7 @@ class CacheManager:
         return os.path.join(self.cache_root, str(idx + 1),
                             os.path.basename(self.files[idx]))
 
-    def task_temp_dir(self, idx):
-        """任务 idx 对应的临时工作目录（temp 子目录）。"""
-        return os.path.join(self.cache_root, str(idx + 1), "temp")
-
     def start(self):
-        if not self.has_unc:
-            return  # 本地路径，无需缓存
         os.makedirs(self.cache_root, exist_ok=True)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -128,95 +100,61 @@ class CacheManager:
         if self.log_callback:
             self.log_callback(msg)
 
-    def _preload_one(self, idx, max_retry=3):
-        """预拉取一个文件（带失败重试 + 完整性校验）。
-
-        只有 local 物理文件确实存在且非空，才写入 ready[idx]；
-        否则视为未就绪（不写 ready），由 wait_until_ready 发现后重新缓存。
-        这样可避免「ready 标记就绪但 tmp/N 实际丢失」导致的任务卡死。
-        """
+    def _preload_one(self, idx):
+        """预拉取一个文件（含错误处理）。"""
         if idx < 0 or idx >= len(self.files):
-            return False
+            return
         f = self.files[idx]
         local = self.local_path(idx)
         tmp = local + ".tmp"
-        for attempt in range(1, max_retry + 1):
+        try:
+            if os.path.exists(local):
+                with self._lock:
+                    self.ready[idx] = local
+                return
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+            with open(f, "rb") as fsrc, open(tmp, "wb") as fdst:
+                while True:
+                    if self._stop_event.is_set():
+                        break
+                    buf = fsrc.read(4 * 1024 * 1024)
+                    if not buf:
+                        break
+                    fdst.write(buf)
+            if os.path.exists(tmp):
+                if os.path.exists(local):
+                    os.remove(local)
+                os.rename(tmp, local)
+            with self._lock:
+                self.ready[idx] = local
+            self._log(f"[缓存] 任务{idx + 1} 已就绪: {os.path.basename(f)}")
+        except Exception as e:
+            self._log(f"[缓存] 任务{idx + 1} 失败: {e}")
             try:
-                if os.path.exists(local) and os.path.getsize(local) > 0:
-                    with self._lock:
-                        self.ready[idx] = local
-                    return True
-                # 清掉可能残破的半截文件，确保从头完整拉取
-                for p in (local, tmp):
-                    try:
-                        if os.path.exists(p):
-                            os.remove(p)
-                    except Exception:
-                        pass
-                os.makedirs(os.path.dirname(local), exist_ok=True)
-                with open(f, "rb") as fsrc, open(tmp, "wb") as fdst:
-                    while True:
-                        if self._stop_event.is_set():
-                            break
-                        buf = fsrc.read(4 * 1024 * 1024)
-                        if not buf:
-                            break
-                        fdst.write(buf)
-                if self._stop_event.is_set():
-                    break
-                if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
-                    os.rename(tmp, local)
-                # 最终校验：local 必须存在且非空
-                if os.path.exists(local) and os.path.getsize(local) > 0:
-                    with self._lock:
-                        self.ready[idx] = local
-                    if attempt > 1:
-                        self._log(f"[缓存] 任务{idx + 1} 第{attempt}次重试成功: {os.path.basename(f)}")
-                    return True
-                # 文件落盘校验失败，进重试
-            except Exception as e:
-                try:
-                    if os.path.exists(tmp):
-                        os.remove(tmp)
-                except Exception:
-                    pass
-                try:
-                    if os.path.exists(local) and os.path.getsize(local) == 0:
-                        os.remove(local)
-                except Exception:
-                    pass
-                if attempt < max_retry:
-                    self._log(f"[缓存] 任务{idx + 1} 预取失败(第{attempt}次)，重试: {e}")
-                else:
-                    self._log(f"[缓存] 任务{idx + 1} 预取失败(已重试{max_retry}次): {e}")
-        # 所有重试耗尽仍未就绪：明确不写 ready，让 wait_until_ready 感知
-        return False
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
 
     def _run(self):
-        # 1) 启动时先缓存第一批（最多 WINDOW 个）
-        n = min(self.WINDOW, len(self.files))
-        for idx in range(n):
-            self._preload_one(idx)
-            if self._stop_event.is_set():
-                return
-        self._preload_idx = n - 1
+        # 1) 启动时先预拉取第一个
+        self._preload_one(0)
+        if self._stop_event.is_set():
+            return
+        self._cached_up_to = 0
 
-        # 2) 循环：以 current_idx 为唯一权威，维护滑动窗口 = WINDOW
-        #    目标预取下标 = curr + WINDOW - 1（当前 + 2 向前）
+        # 2) 循环：等 worker 推进到 i 后，再预拉取 i+1（始终只多缓存 1 个）
         while not self._stop_event.is_set():
             with self._lock:
                 curr = self._current_idx
-            if curr < 0:
-                time.sleep(0.2)
-                continue
-            target = curr + self.WINDOW - 1
+            target = curr + 1
             if target >= len(self.files):
                 break
-            with self._lock:
-                if target <= self._preload_idx:
-                    time.sleep(0.2)
-                    continue
-            # 错峰：预拉取前等 3 秒，避免与当前任务抢带宽
+            if target <= self._cached_up_to:
+                # 已经预拉取过了，但 worker 还没追到，短暂等
+                time.sleep(0.2)
+                continue
+            # 错峰：缓存下一个前等 3 秒（避免和 worker 同时抢占带宽/硬盘）
             for _ in range(30):
                 if self._stop_event.is_set():
                     break
@@ -224,136 +162,56 @@ class CacheManager:
             if self._stop_event.is_set():
                 break
             self._preload_one(target)
-            self._preload_idx = target
+            self._cached_up_to = target
 
-    def wait_until_ready(self, idx, timeout_per_gb=120, max_timeout=3600):
-        """阻塞等待 idx 缓存就绪，输出等待时间。返回本地缓存路径。
-
-        增强（v23.13）：
-        - 物理校验：ready[idx] 指向的文件必须真实存在且非空，否则视为
-          「缓存丢失」，主动触发一次重缓存（_preload_one 内部已带重试），
-          避免 ready 标记就绪但 tmp/N 实际消失导致任务卡死/失败。
-        - 超时兜底：等待超过阈值（按源文件大小估算，最少 5 分钟，最多
-          max_timeout）仍未就绪，返回 None，由 Worker 跳过该任务而非卡死全队。
-        """
-        # 非 UNC 路径直接返回原始路径
-        if not self.has_unc:
-            return self.files[idx]
-
-        def _phys_ok(p):
+    def ensure(self, idx):
+        """阻塞等待 idx 缓存就绪；若后台过慢/失败，前台同步拷贝兜底。"""
+        with self._lock:
+            if idx in self.ready:
+                return self.ready[idx]
+        local = self.local_path(idx)
+        if not os.path.exists(local):
             try:
-                return bool(p) and os.path.exists(p) and os.path.getsize(p) > 0
-            except Exception:
-                return False
-
-        # 超时阈值：按源文件大小估算（每 GB 给 timeout_per_gb 秒），夹在 [300, max_timeout]
-        try:
-            size_gb = os.path.getsize(self.files[idx]) / (1024 ** 3)
-        except Exception:
-            size_gb = 0
-        timeout = max(300, min(max_timeout, int(size_gb * timeout_per_gb) + 300))
-
-        start = time.time()
-        recovered = False
-        while not self._stop_event.is_set():
-            with self._lock:
-                path = self.ready.get(idx)
-            # 物理校验：标记就绪但文件丢了 → 缓存丢失，触发重缓存一次
-            if path is not None and not _phys_ok(path):
-                with self._lock:
-                    self.ready.pop(idx, None)
-                self._log(f"[缓存] 任务{idx + 1} 缓存丢失（tmp 目录不存在），重新缓存一次...")
-                if self._preload_one(idx):
-                    recovered = True
-                else:
-                    self._log(f"[缓存] 任务{idx + 1} 重缓存失败，等待超时后将跳过")
-            # 就绪且物理存在 → 返回
-            with self._lock:
-                path = self.ready.get(idx)
-            if _phys_ok(path):
-                elapsed = time.time() - start
-                if elapsed >= 1 or recovered:
-                    self._log(f"[缓存] 任务{idx + 1} 已就绪（等待{_format_duration(elapsed)}）{'，已重缓存' if recovered else ''}")
-                return path
-            # 超时兜底：避免单任务卡死整队
-            if time.time() - start > timeout:
-                self._log(f"[缓存] 任务{idx + 1} 等待超时（{_format_duration(timeout)}），将跳过以避免卡死")
+                os.makedirs(os.path.dirname(local), exist_ok=True)
+                shutil.copy2(self.files[idx], local)
+            except Exception as e:
+                self._log(f"[缓存] 任务{idx + 1} 同步兜底失败: {e}")
                 return None
-            time.sleep(0.3)
-
-        # 被终止
-        return None
-
-    def mark_processing(self, idx):
-        """Worker 真正开始处理任务 idx 前调用，加锁置 current_idx。
-
-        后台预取线程据此把预取目标推进到 idx + WINDOW - 1，
-        当前窗口外的目录才允许清理，杜绝误删正在预取的目录。
-        """
         with self._lock:
-            self._current_idx = idx
+            self.ready[idx] = local
+        return local
 
-    def on_task_done(self, idx, debug_mode=False):
-        """任务 idx(0-based) 完成后调用：
-        1) 加锁推进 current_idx = idx + 1（通知后台线程滑窗前进）
-        2) 滑窗清理：删除所有 d_idx < current_idx - (WINDOW - 1) 的数字目录
-           即处理任务 N 完成时至少清理到 N-2（含 N-2），仅保留 N-1、N
-           两个目录；预取目标始终在 curr + WINDOW - 1（= N+2）之外，
-           清理边界(<=N-2)与预取目标(>=N)间隔 >=4，绝无误删竞态
+    def cleanup_before(self, idx):
+        """完成任务 idx(0-based) 后，清理上一任务(tmp/(idx)) 的缓存目录。"""
+        prev = os.path.join(self.cache_root, str(idx))
+        if os.path.isdir(prev):
+            try:
+                shutil.rmtree(prev, ignore_errors=True)
+                self._log(f"[缓存] 已清理上一任务目录: {prev}")
+            except Exception:
+                pass
 
-        参数：
-          debug_mode — 调试模式时仅清理 temp/ 子目录，保留缓存视频文件
-        """
-        if not self.has_unc:
-            return
-        with self._lock:
-            self._current_idx = idx + 1
-            cleanup_threshold = self._current_idx - (self.WINDOW - 1)
-            for name in os.listdir(self.cache_root):
-                if not (name.isdigit()):
-                    continue
-                d_idx = int(name) - 1
-                if d_idx >= cleanup_threshold:
-                    continue  # 仍在窗口内（N-1、N），保留
-                target = os.path.join(self.cache_root, name)
-                if not os.path.isdir(target):
-                    continue
-                if debug_mode:
-                    # 调试模式：只清 temp 子目录，保留缓存视频
-                    temp_dir = os.path.join(target, "temp")
-                    if os.path.isdir(temp_dir):
-                        try:
-                            shutil.rmtree(temp_dir, ignore_errors=True)
-                            self._log(f"[缓存] 调试模式，已清理临时目录: {temp_dir}")
-                        except Exception:
-                            pass
-                else:
-                    try:
-                        shutil.rmtree(target, ignore_errors=True)
-                        self._log(f"[缓存] 已清理任务{name} 目录: {target}")
-                    except Exception:
-                        pass
-
-    def cleanup_all(self, debug_mode=False):
-        """停止后台线程并清理所有数字子目录，保留 tmp/ 本身。
-
-        参数：
-          debug_mode — 调试模式时跳过清理（保留所有调试文件）
-        """
+    def cleanup_all(self):
+        """停止后台线程并清理所有数字子目录和临时文件，保留 tmp/ 本身。"""
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
-        if self.has_unc and not debug_mode:
-            for name in os.listdir(self.cache_root):
-                fp = os.path.join(self.cache_root, name)
-                if os.path.isdir(fp) and name.isdigit():
-                    try:
-                        shutil.rmtree(fp, ignore_errors=True)
-                    except Exception:
-                        pass
-            self._log("[缓存] 全部任务完成，已清理 tmp/ 子目录（保留 tmp/）")
-        elif debug_mode:
-            self._log("[缓存] 调试模式，保留所有临时文件")
+        for name in os.listdir(self.cache_root):
+            fp = os.path.join(self.cache_root, name)
+            if os.path.isdir(fp) and name.isdigit():
+                try:
+                    shutil.rmtree(fp, ignore_errors=True)
+                except Exception:
+                    pass
+        # 清理临时文件目录 tmp/temp/
+        tempd = os.path.join(self.cache_root, "temp")
+        if os.path.isdir(tempd):
+            try:
+                shutil.rmtree(tempd, ignore_errors=True)
+                os.makedirs(tempd, exist_ok=True)
+            except Exception:
+                pass
+        self._log("[缓存] 全部任务完成，已清理 tmp/ 子目录（保留 tmp/）")
 
 
 # ---------------------------------------------------------------------------
@@ -378,13 +236,15 @@ class Worker(QThread):
     file_done = pyqtSignal(int, str, str, str, str)  # (row, plan, status, level, out_path)
     finished = pyqtSignal()
 
-    def __init__(self, files, results, cfg, mode, cfg_override=None):
+    def __init__(self, files, results, cfg, mode, cfg_override=None,
+                 skip_done_paths=None):
         super().__init__()
         self.files = files
         self.results = results
         self.cfg = cfg
         self.cfg_override = cfg_override or cfg
         self.mode = mode            # 'scan' | 'process'
+        self.skip_done_paths = set(skip_done_paths or [])  # v23.16: 断点续传
         self._stop = False
         self.cache = None
 
@@ -433,46 +293,113 @@ class Worker(QThread):
                 return out_path
         return target
 
+    # ------------------------------------------------------------------
+    # v23.15: 任务级临时目录滑动窗口清理
+    #   调试模式的本意是“保留当前任务的中间产物供排查”，但旧实现写成了
+    #   “所有任务产物永久保留、跨任务不清理”，导致 73 个任务把 C 盘打满
+    #   （[Errno 28] No space left on device）。
+    #   新语义：
+    #     - 成功 / 跳过任务：无论是否调试，立即清理 tmp/temp/；
+    #       若此前保留了某个失败任务的快照(tmp/debug_last)，一并回收。
+    #     - 失败 / 异常任务 + 调试模式：把当前 tmp/temp/ 整目录移栽到
+    #       tmp/debug_last/ 作为快照（先清空旧快照，保证最多只留 1 个）。
+    #     - 失败 / 异常任务 + 非调试：直接清理 tmp/temp/。
+    #   即“滑动窗口”：始终最多保留最近一个失败任务的产物，磁盘占用有硬上限。
+    # ------------------------------------------------------------------
+    def _cleanup_dir_children(self, d):
+        """删除目录 d 下的所有条目，但保留目录 d 本身。"""
+        if not os.path.isdir(d):
+            return
+        for name in os.listdir(d):
+            fp = os.path.join(d, name)
+            try:
+                if os.path.isdir(fp):
+                    shutil.rmtree(fp, ignore_errors=True)
+                else:
+                    os.remove(fp)
+            except Exception:
+                pass
+
+    def _post_task_cleanup(self, debug_mode=False, success=True):
+        """任务结束后的临时目录滑动窗口清理。"""
+        from core import config as _cfg
+        tmp_root = os.path.join(_cfg.app_root(), "tmp")
+        temp_dir = os.path.join(tmp_root, "temp")
+        debug_last = os.path.join(tmp_root, "debug_last")
+
+        if success:
+            # 成功/跳过：立即清理 tmp/temp/；并回收上一次失败快照（滑动窗口）
+            self._cleanup_dir_children(temp_dir)
+            if os.path.isdir(debug_last):
+                try:
+                    shutil.rmtree(debug_last, ignore_errors=True)
+                except Exception:
+                    pass
+            return
+
+        # 失败/异常
+        if not debug_mode:
+            self._cleanup_dir_children(temp_dir)
+            return
+
+        # 调试模式：保留本次失败产物为快照（先清旧快照，保证最多 1 个）
+        try:
+            if os.path.isdir(debug_last):
+                shutil.rmtree(debug_last, ignore_errors=True)
+            if os.path.isdir(temp_dir):
+                os.makedirs(debug_last, exist_ok=True)
+                # 移栽 tmp/temp/ 下所有内容到 tmp/debug_last/
+                moved = False
+                for name in os.listdir(temp_dir):
+                    src = os.path.join(temp_dir, name)
+                    dst = os.path.join(debug_last, name)
+                    try:
+                        shutil.move(src, dst)
+                        moved = True
+                    except Exception:
+                        pass
+                if moved:
+                    self._log("[调试] 已保留失败任务中间产物到 tmp/debug_last/ 供排查")
+        except Exception:
+            pass
+        # 确保 temp 目录仍存在，供后续任务使用
+        os.makedirs(temp_dir, exist_ok=True)
+
+    @staticmethod
+    def _purge_stale_temp_on_start():
+        """启动处理前清掉历史残留（tmp/temp/ 与 tmp/debug_last/），避免堆积。"""
+        try:
+            from core import config as _cfg
+            tmp_root = os.path.join(_cfg.app_root(), "tmp")
+            for sub in ("temp", "debug_last"):
+                d = os.path.join(tmp_root, sub)
+                if os.path.isdir(d):
+                    shutil.rmtree(d, ignore_errors=True)
+                os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+
     def run(self):
         total = len(self.files)
-        cache_root = os.path.join(config_mod.app_root(), "tmp")
-
-        # v23: 自动判度 — UNC 网络路径走缓存，本地盘符直读
-        self.cache = CacheManager(self.files, cache_root, self._log)
-        self.cache.start()
-        if self.cache.has_unc:
-            self.cache.current_idx = 0
-
-        debug_mode = self.cfg.get("debug_mode", False)
+        # v22: 移除本地缓存，直读 NAS（2Gbps 内网，缓存因全量复制反而更慢）
+        self.cache = None
+        # v23.15: 启动前清掉历史残留，避免上一次运行（尤其是调试模式）留下的
+        # tmp/temp/ 与 tmp/debug_last/ 堆积物继续占用磁盘
+        self._purge_stale_temp_on_start()
+        debug_mode = bool(self.cfg_override.get("debug_mode", False))
 
         for i, f in enumerate(self.files):
             if self._stop:
                 self.file_done.emit(i, "", "已取消", "warn", "")
                 break
             self.file_start.emit(i)
+            success = True
             try:
-                # 通知缓存管理器：worker 即将处理任务 i（滑窗推进依据）
-                if self.cache.has_unc:
-                    self.cache.mark_processing(i)
-                # 等待缓存就绪（非 UNC 路径立即返回原始路径）
-                local_path = self.cache.wait_until_ready(i)
-                if local_path is None:
-                    # 单个任务缓存失败：跳过本任务并继续后续，避免整队卡死
-                    self._log(f"[缓存] 任务{i + 1} 缓存失败，跳过该任务继续后续", "error")
-                    self.file_done.emit(i, "", "缓存失败，已跳过", "error", "")
-                    self.cache.on_task_done(i, debug_mode=debug_mode)
-                    continue
-
-                # 每个任务独立临时目录
-                task_temp_dir = self.cache.task_temp_dir(i)
-                os.makedirs(task_temp_dir, exist_ok=True)
-
                 if self.mode == "scan":
                     self._log(f"分析: {f}")
                     tracks, _ = pipeline.analyze_file(
-                        local_path, self.cfg,
-                        log=lambda m, l="info": self._log(m, l),
-                        orig_path=f, temp_dir=task_temp_dir)
+                        f, self.cfg, log=lambda m, l="info": self._log(m, l),
+                        orig_path=f)
                     self.results[f] = tracks
                     # v22: 所有识别失败 → 跳过
                     if _any_track_failed(tracks):
@@ -483,11 +410,14 @@ class Worker(QThread):
                         continue
                     self.file_done.emit(i, fmt_plan(tracks), "已分析", "ok", "")
                 else:
+                    # v23.16: 导入记录后续传 —— 自动跳过已完成的文件
+                    if self.skip_done_paths and f in self.skip_done_paths:
+                        self.file_done.emit(
+                            i, "", "已完成(自动跳过)", "ok", "")
+                        continue
                     self._log(f"处理: {f}")
                     run_cfg = dict(self.cfg_override)
                     run_cfg["output_overwrite"] = False
-                    # v23.8: 清除扫描阶段残留的 TMDB 缓存（处理阶段自动按文件名解析）
-                    run_cfg.pop("_tmdb_movie_info", None)
                     if f in self.results:
                         # v22: 跳过标记为 skip 的文件
                         cached = self.results[f]
@@ -501,15 +431,13 @@ class Worker(QThread):
                                 self._log(f"  转封装进度: {pct}%", "info")
                                 _last_pct[0] = pct
                         ok, out, msg, _ = pipeline.process_tracks(
-                            local_path, cached, run_cfg,
+                            f, cached, run_cfg,
                             log=lambda m, l="info": self._log(m, l),
-                            progress_callback=_on_remux_progress,
-                            orig_path=f, temp_dir=task_temp_dir)
+                            progress_callback=_on_remux_progress)
                     else:
                         ok, out, msg, tracks = pipeline.process_file(
-                            local_path, run_cfg,
-                            log=lambda m, l="info": self._log(m, l),
-                            orig_path=f, temp_dir=task_temp_dir)
+                            f, run_cfg,
+                            log=lambda m, l="info": self._log(m, l))
                         self.results[f] = tracks
                     out_path = out or ""
                     plan = fmt_plan(self.results[f])
@@ -517,10 +445,8 @@ class Worker(QThread):
                         i, plan, "完成" if ok else f"失败: {msg}",
                         "ok" if ok else "error", out_path or "")
 
-                # 完成任务 i：滑窗推进 + 清理窗口外目录（加锁，杜绝竞态误删）
-                self.cache.on_task_done(i, debug_mode=debug_mode)
-
             except Exception as e:
+                success = False
                 tb = traceback.format_exc()
                 try:
                     sys.stderr.write(
@@ -529,12 +455,16 @@ class Worker(QThread):
                     pass
                 self._log(f"[异常] 文件 {os.path.basename(f)}:\n{tb}", "error")
                 self.file_done.emit(i, "", f"异常: {e}", "error", "")
+            finally:
+                # v23.15: 任务级滑动窗口清理（成功即清；失败+调试保留为快照）
+                self._post_task_cleanup(debug_mode, success)
 
             self.progress.emit(i + 1, total)
 
-        # 整个流程结束：清理 config 中残留的 TMDB 缓存
-        self.cfg.pop("_tmdb_movie_info", None)
-        self.cache.cleanup_all(debug_mode=debug_mode)
+        # 整个流程结束：清理所有缓存子目录（成功清理 + 失败快照一并回收），保留 tmp/
+        self._post_task_cleanup(debug_mode, success=True)
+        if self.cache:
+            self.cache.cleanup_all()
         self.finished.emit()
 
 
@@ -555,6 +485,7 @@ class MainWindow(QMainWindow):
         self.files = []
         self.results = {}
         self._track_data = {}
+        self._completed = {}          # v23.16: path -> (status, level)，已成功完成的文件
         self.worker = None
         self.worker_cfg_override = None
         self._saved_after_last_mod = True
@@ -692,6 +623,9 @@ class MainWindow(QMainWindow):
                 col, QHeaderView.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setMouseTracking(True)
+        # v23.16: 右键菜单（删除选中行）
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
         v.addWidget(self.table, 3)
 
         # Controls + progress
@@ -919,8 +853,10 @@ class MainWindow(QMainWindow):
         label = "扫描预览" if mode == "scan" else "处理"
         self.log.log(f"任务开始: {self._task_start.strftime('%H:%M:%S')}", "info")
         cfg_override = getattr(self, 'worker_cfg_override', None)
+        # v23.16: 处理模式传入已完成集合，导入记录后自动跳过
+        skip = set(self._completed.keys()) if mode == "process" else None
         self.worker = Worker(self.files, self.results, self.cfg, mode,
-                             cfg_override=cfg_override)
+                             cfg_override=cfg_override, skip_done_paths=skip)
         self.worker.log.connect(self.log.log)
         self.worker.progress.connect(self._on_progress)
         self.worker.file_start.connect(self._on_file_start)
@@ -1110,6 +1046,43 @@ class MainWindow(QMainWindow):
         # 1.5 秒后恢复待机（让 tray 有时间展示对勾）
         QTimer.singleShot(1500, lambda: _ipc_send_state("idle"))
 
+    # --------------------------- 行删除（v23.16） ---------------------------
+    def _on_table_context_menu(self, pos):
+        """表格右键菜单：删除选中行。处理进行中禁用删除。"""
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if not rows:
+            return
+        menu = QMenu(self)
+        has_worker = bool(self.worker and self.worker.isRunning())
+        del_act = QAction(f"删除选中行 ({len(rows)})", self)
+        del_act.triggered.connect(lambda: self._delete_rows(rows))
+        if has_worker:
+            del_act.setEnabled(False)
+            del_act.setToolTip("处理进行中不可删除，请先「停止当前」")
+        menu.addAction(del_act)
+        menu.exec_(self.table.viewport().mapToGlobal(pos))
+
+    def _delete_rows(self, rows):
+        """从 files/results/_track_data/_completed 中同步删除选中行并重填表。"""
+        rows = sorted(set(rows), reverse=True)
+        removed = []
+        for r in rows:
+            if 0 <= r < len(self.files):
+                f = self.files[r]
+                removed.append(f)
+                self.files.pop(r)
+                self.results.pop(f, None)
+                self._track_data.pop(f, None)
+                self._completed.pop(f, None)
+        if not removed:
+            return
+        self._fill_table()
+        self.b_scan.setEnabled(bool(self.files))
+        self.b_run.setEnabled(bool(self.files))
+        self.log.log(
+            f"已删除 {len(removed)} 个文件："
+            + ", ".join(os.path.basename(x) for x in removed), "warn")
+
     # --------------------------- Other ---------------------------
     def open_settings(self):
         dlg = settings_dialog.SettingsDialog(self.cfg, self)
@@ -1117,47 +1090,73 @@ class MainWindow(QMainWindow):
             self._reload_config()
 
     def save_record(self):
-        """把当前扫描结果+手动修改保存到 records/ 目录。"""
-        if not self.results:
-            self.log.log("没有扫描结果可保存。", "warn")
+        """v23.16: 保存扫描/处理记录，含每行状态与已完成标记，支持断点续传。"""
+        if not self.files:
+            self.log.log("没有文件可保存。", "warn")
             return
         import json
         records_dir = os.path.join(config_mod.app_root(), "records")
         os.makedirs(records_dir, exist_ok=True)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         fpath, _ = QFileDialog.getSaveFileName(
-            self, "保存扫描记录", os.path.join(records_dir, f"mmf_{timestamp}.json"),
+            self, "保存扫描/处理记录",
+            os.path.join(records_dir, f"mmf_{timestamp}.json"),
             "扫描记录 (*.json);;所有文件 (*.*)")
         if not fpath:
             return
         data = {
-            "version": 1,
+            "version": 2,
             "timestamp": timestamp,
             "files": [],
         }
-        for fpath_orig, tracks in self.results.items():
-            file_entry = {"path": fpath_orig, "tracks": []}
+        completed_now = {}
+        for i, f in enumerate(self.files):
+            # 读表格当前状态列（5 列）+ 计划动作列（4 列）
+            status = ""
+            plan = ""
+            if 0 <= i < self.table.rowCount():
+                it5 = self.table.item(i, 5)
+                it4 = self.table.item(i, 4)
+                if it5:
+                    status = it5.text()
+                if it4:
+                    plan = it4.text()
+            tracks = self.results.get(f, [])
+            tracks_data = []
             for t in tracks:
                 if t.track_type in ("audio", "subtitle"):
-                    file_entry["tracks"].append({
+                    tracks_data.append({
                         "id": t.track_id,
                         "type": t.track_type,
                         "detected_iso": t.detected_iso,
-                        "detected_kind": t.detected_kind,
+                        "detected_kind": getattr(t, "detected_kind", ""),
                         "action": t.action,
                         "name": t.track_name or t.detected_name or "",
+                        "note": getattr(t, "note", "") or "",
                     })
-            data["files"].append(file_entry)
+            # 已完成：状态含「完成」且非 error
+            done = ("完成" in status) and ("失败" not in status)
+            data["files"].append({
+                "path": f,
+                "status": status,
+                "done": bool(done),
+                "plan": plan,
+                "tracks": tracks_data,
+            })
+            if done:
+                completed_now[f] = (status, "ok")
         try:
-            with open(fpath, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            self.log.log(f"扫描记录已保存: {fpath}", "ok")
+            with open(fpath, "w", encoding="utf-8") as fo:
+                json.dump(data, fo, ensure_ascii=False, indent=2)
+            self._completed = completed_now
+            self.log.log(f"记录已保存({len(data['files'])} 个文件, "
+                         f"{len(completed_now)} 个已完成): {fpath}", "ok")
             self._saved_after_last_mod = True
         except Exception as e:
             self.log.log(f"保存失败: {e}", "error")
 
     def load_record(self):
-        """从 JSON 记录文件导入扫描结果，恢复人工修改。"""
+        """v23.16: 从记录导入，恢复人工修改 + 状态列 + 已完成标记（断点续传）。"""
         import json
         records_dir = os.path.join(config_mod.app_root(), "records")
         fpath, _ = QFileDialog.getOpenFileName(
@@ -1171,15 +1170,16 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log.log(f"导入失败: {e}", "error")
             return
-        # 重建 files 列表 + results
         from core.probe import Track
         loaded_files = []
         loaded_results = {}
+        done_map = {}          # path -> (status, level)
+        saved_status = {}      # path -> 保存时的状态文字
         for fe in data.get("files", []):
             orig = fe["path"]
             loaded_files.append(orig)
             tracks = []
-            for te in fe["tracks"]:
+            for te in fe.get("tracks", []):
                 t = Track(stream_index=te["id"], track_id=te["id"],
                           track_type=te["type"], codec="")
                 t.detected_iso = te.get("detected_iso")
@@ -1187,24 +1187,39 @@ class MainWindow(QMainWindow):
                 t.action = te.get("action", "keep")
                 t.track_name = te.get("name", "")
                 t.detected_name = te.get("name", "")
+                t.note = te.get("note", "")
                 tracks.append(t)
             loaded_results[orig] = tracks
+            saved_status[orig] = fe.get("status", "")
+            if fe.get("done"):
+                done_map[orig] = (fe.get("status", "已完成"), "ok")
         self.files = loaded_files
         self.results = loaded_results
         self._track_data = {}
+        self._completed = dict(done_map)
         self._fill_table()
-        # 导入后立即刷新计划动作列
+        # 导入后恢复计划动作列 + 状态列 + 已完成绿色标记
+        pol = None
         for i, f in enumerate(self.files):
             if f in self.results:
-                from core import policy as pol
+                if pol is None:
+                    from core import policy as _pol
+                    pol = _pol
                 pol.apply_audio_policy(self.results[f], self.cfg)
                 pol.apply_subtitle_policy(self.results[f], self.cfg)
                 plan = fmt_plan(self.results[f])
                 self.table.setItem(i, 4, QTableWidgetItem(plan))
+            st = saved_status.get(f, "")
+            if st:
+                self.table.setItem(i, 5, QTableWidgetItem(st))
+                if f in self._completed:
+                    self._set_row_color(i, QColor("#1b5e20"))
         self.b_scan.setEnabled(True)
         self.b_run.setEnabled(True)
         self.b_save.setEnabled(True)
-        self.log.log(f"已导入记录: {fpath} ({len(loaded_files)} 个文件)", "ok")
+        n_done = len(self._completed)
+        tip = f"（其中 {n_done} 个已完成，开始处理时将自动跳过）" if n_done else ""
+        self.log.log(f"已导入记录: {fpath} ({len(loaded_files)} 个文件){tip}", "ok")
         self._saved_after_last_mod = True
 
     def open_readme(self):
@@ -1286,7 +1301,8 @@ class MainWindow(QMainWindow):
             if os.path.isdir(cache_root):
                 for name in os.listdir(cache_root):
                     fp = os.path.join(cache_root, name)
-                    if os.path.isdir(fp) and (name.isdigit() or name == "temp"):
+                    if os.path.isdir(fp) and (name.isdigit() or name == "temp"
+                                             or name == "debug_last"):
                         try:
                             shutil.rmtree(fp)
                         except Exception:

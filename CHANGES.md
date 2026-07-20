@@ -1,169 +1,51 @@
 # MediaMetaFixer 变更说明
 
-## 📌 v23.14 (配置兼容性修复 — 覆盖安装不再丢配置)
+## ✏️ v23.16 — 记录编辑器：删除行 + 断点续传
 
-### 🛡️ 修复（配置兼容性，严重）
-- **🐞 根因**：`config.py` 用应用版本号 `APP_VERSION`（如 `v23`）做配置兼容性判断，
-  覆盖安装时新版本的 config.json 覆盖了旧配置（无论有无 `_schema_version`），
-  `load()` 判定版本不匹配 → **清空用户全部自定义配置并重置**，导致反复「配置升级」日志、设置丢失
-- **✅ schema 版本与应用版本解耦**：新增 `SCHEMA_VERSION="1"`，**仅它**决定配置兼容性；
-  `APP_VERSION`（如 `v23.13`）仅用于界面/日志署名，改应用版本不再触发配置重置
-- **✅ 升级改为合并而非清空**：`_schema_version` 不匹配时 `{**DEFAULTS, **用户旧值}` 合并，
-  保留用户改过的字体 / 调试 / 重命名 / TMDB 等设置，只丢弃 DEFAULTS 外的未知 key
-- **✅ 路径统一**：`resolve_config_path()` 改基于 `app_root()`（层级关系推导，不假设父目录名，
-  无论 `mediameta_fixer` / `mkvtrackfix-main` / `mkvtrackfix v9` 都正确），删除误导的 `CONFIG_PATH` 常量
-- **✅ save 显式写出 `_schema_version`**：覆盖安装后首次启动自动修好 config，不再反复升级
-- **✅ 不硬编码父目录名**：全代码库确认无 `mediameta_fixer` / `mkvtrackfix-*` 等目录名假设，迁移/改名无损
+### 需求
+扫描后发现个别文件不行、或处理中途失败，希望：
+- 在表格上 **删除** 某一行（不行/不想处理的），而不是整批重来；
+- 处理中断后，**保存记录 → 导入 → 继续处理剩下的**，已完成的不重复跑。
 
----
+### 新增
+- **表格右键菜单「删除选中行」**：同步从 `files` / `results` / `_track_data` / `_completed` 删除并重填表格；
+  处理进行中自动禁用删除（先「停止当前」），避免行号错位。
+- **`save_record` 升级为 v2**：除音轨/字幕动作外，额外记录每行的 `status`（状态列文字）、`done`（是否成功完成）。
+- **`load_record` 断点续传**：导入时还原状态列，已完成的行标绿（#1b5e20）；
+  若记录含 `done` 标记，开始处理时 Worker **自动跳过**这些文件，只处理剩余任务。
+- **兼容 v1 老记录**（无 status/done 字段）正常导入，不自动跳过。
 
-## 📌 v23.13 (缓存丢失自愈 + 单任务失败不卡死)
-
-### 🛡️ 修复（健壮性，严重）
-- **🐞 卡死根因**：`开始处理` 阶段某任务（如 2160p UHD 大文件）缓存因 NAS 网络抖动失败/丢失，
-  `ready[idx]` 标记缺失或指向已消失的 `tmp/N`，`wait_until_ready(idx)` 无限等待 → 整队卡在最后任务
-- **✅ 缓存丢失自愈**：`wait_until_ready` 增加**物理校验**——`ready[idx]` 指向文件必须真实存在且非空，
-  否则判定「缓存丢失」并主动 `_preload_one(idx)` **重新缓存一次**，让任务继续而非卡死
-- **✅ 预取失败重试**：`_preload_one` 内部失败**自动重试最多 3 次**（网络抖动自愈），
-  且只在 `local` 物理落盘成功后才写 `ready`，杜绝「标记就绪但文件残破」的中间态
-- **✅ 超时兜底**：`wait_until_ready` 按源文件大小估算超时阈值（每 GB 120s，夹在 300s~3600s），
-  超时返回 `None`，**Worker 跳过该单任务并继续后续**，不再 `break` 中断整队
-- **✅ 单任务失败隔离**：原 `wait_until_ready` 返回 `None` 时 `break` 全队 → 改为 `continue` 跳过单个任务，
-  73 任务里个别失败不影响其余（避免「动不动跳过几十个」的反面——卡死更糟）
-
-### 🔧 改动点
-- `_preload_one(self, idx, max_retry=3)`：重写，加大重试 + 完成落盘校验 + 半截文件清理
-- `wait_until_ready(self, idx, timeout_per_gb=120, max_timeout=3600)`：物理校验 + 缓存丢失重缓存 + 超时
-- `Worker.run()`：`wait_until_ready` 返回 `None` 时 `continue`（跳过单任务）替代 `break`（终止全队）
-- 清理逻辑与 v23.12 保持一致（WINDOW=3 滑窗，处理 N 清到 N-2）；`_run` 预取窗口 `curr+2` 与扫描阶段对齐，未改
+### 效果
+完整闭环：扫描 → 右键删掉不行的 → 开始处理 → 中途失败先「停止」→
+「保存记录」→ 关掉/重开 → 「导入记录」（已完成行自动标绿）→ 「开始处理」只跑剩下的。
+也可手动右键删除已完成行再保存，行为一致。
 
 ---
 
-## 📌 v23.12 (缓存清理收紧 — 处理 N 必清到 N-2)
+## 🐛 v23.15 — 调试模式磁盘打满修复
 
-### 🧹 优化（缓存占用）
-- **清理边界收紧一格**：`on_task_done(i)` 的滑窗清理阈值由 `current_idx - WINDOW` 改为 `current_idx - (WINDOW - 1)`
-  - 效果：处理任务 N 完成时**立即清理到 N-2（含 N-2）**，仅保留 N-1、N 两个目录
-  - 长列表（如 73 任务）场景下，本地缓存峰值从「保留 N-2/N-1/N + 预取2个 ≈ 6~7 部」降为「保留 N-1/N + 预取2个 ≈ 5~6 部」，少缓存约 1 部电影体积
-- **安全性不变**：清理边界（≤ N-2）与预取目标（≥ N，即 curr+WINDOW-1=N+2）间隔 ≥ 4 个目录，正处理/正在预取的目录绝不被误删，竞态根除性质保持
+### 问题
+开启「调试模式」批量处理（如 73 个任务）时，C 盘被写满导致 `[Errno 28] No space left on device`。
+根因：调试模式的本意是「保留当前任务中间产物供排查」，但旧实现写成了**所有任务产物永久保留、跨任务不清理**：
 
-### 🔧 改动点
-- `on_task_done(self, idx)`：`cleanup_threshold = self._current_idx - self.WINDOW` → `- (self.WINDOW - 1)`
-- 同步更新 `CacheManager` 类文档字符串与 `_run` 注释的清理语义描述
+- `Worker._clean_temp_dir`：调试模式直接 `return`，整个 `tmp/temp/` 工作目录从不清理；
+- `pipeline._detect_audio`：调试模式保留每片音频段 WAV；
+- `subtitle_detect._ocr_with_tesseract`：调试模式保留每 PGS 字幕几百张 1080p 帧图；
+- `ai_worker._ensure_local_copy`：UNC 整片复制在调试模式永不删除。
 
----
+叠加后 73 个任务的全部中间产物堆积在本地，把 C 盘（118GB）打满。
 
-## 📌 v23.11 (缓存滑窗状态机 — 修复竞态误删)
+### 修复（滑动窗口清理）
+- **任务级滑动窗口**（`Worker._post_task_cleanup`）：
+  - 成功 / 跳过任务：无论是否调试，立即清理 `tmp/temp/`；若此前保留过失败快照也一并回收。
+  - 失败 / 异常 + 调试：把当前 `tmp/temp/` 整目录移栽到 `tmp/debug_last/` 作为快照，**先清旧快照，保证最多只留 1 个**。
+  - 失败 / 异常 + 非调试：直接清理。
+- **启动前**（`_purge_stale_temp_on_start`）：清掉 `tmp/temp/` 与 `tmp/debug_last/` 历史残留，避免上次运行遗留物继续占盘。
+- **收尾 / 关闭**（`closeEvent`）：额外清理 `tmp/debug_last/`。
+- **`ai_worker` UNC 整片复制加固**：改用源路径 hash 的稳定命名（同一文件不重复复制），并加 `_purge_stale_cache(max_keep=2)` 窗口清理，杜绝整部电影副本无限堆积。
 
-### 🛡️ 修复（严重）
-- **🐞 缓存竞态误删**：原 `MAX_WINDOW=4` 设计在 73 文件长列表中，后台预取线程已缓存任务 5 的 `tmp/5/`，而 Worker 的 `cleanup_after(4)` 无条件 `rmtree` 整个 `tmp/N/` 会把**正在预取的任务 5 目录误删**，导致任务 5 等待一个已被删的缓存卡死
-- **✅ 改为 `current_idx` 权威 + 滑动窗口（WINDOW=3）状态机**：
-  - 后台预取仅推进到 `curr + WINDOW - 1`（当前 + 2 向前），任务 `curr+3` 不再预取
-  - 新增 `mark_processing(i)`：Worker 处理任务前加锁置 `current_idx`，后台线程据此滑动窗口
-  - `on_task_done(i)` 替代 `cleanup_after(i)`：加锁将 `current_idx` 推进到 `i+1`，**仅清理 `idx < current_idx - WINDOW` 的窗口外目录**，窗口内/正在预取目录绝不被删
-  - 清理与预取受同一把锁保护，竞态根除
-
-### 🔧 重构
-- `CacheManager.MAX_WINDOW=4` → `WINDOW=3`
-- `_run()` 预取目标 `curr + MAX_WINDOW` → `curr + WINDOW - 1`，去掉启动期一次性预取 4 个的激进策略
-- `cleanup_after(i)` → `on_task_done(i)`（滑窗清理，保留调试模式 `temp/` 局部清理语义）
-- `Worker.run()` 在每个任务处理前调用 `mark_processing(i)`，完成后调用 `on_task_done(i)`
-
----
-
-## 📌 v23.10 (TMDB 缓存隔离)
-
-### 🐛 修复
-- **`analyze_file` 设置 TMDB 信息前清旧值**：`core/pipeline.py` 在写入 `_tmdb_movie_info` 前先 `pop` 旧值，避免共享 config 对象上的残留值串到下一个文件
-
----
-
-## 📌 v23.9 (修复 TMDB 缓存串文件)
-
-### 🐛 修复
-- **🐞 多文件命名混乱根因**：扫描阶段 `analyze_file` 把 `_tmdb_movie_info` 写入共享 `cfg` 对象，最后文件的 TMDB 信息覆盖前面所有文件，导致 4 个文件输出同名（如全变「马路天使」）
-- **✅ 修复**：`Worker.run()` 处理循环中 `pop("_tmdb_movie_info")` 让 `smart_rename` 按文件名独立解析；整个流程结束再 `cfg.pop()` 清理，防止影响下次操作
-
----
-
-## 📌 v23.8 (内测声明)
-
-### 📝 文档
-- **README 新增「⚠️ 内测声明」**：明确非破坏式输出原则、推荐测试目录先验证、不承担责任等条款
-- **版本标识改为 `v23 · Active Development`**
-- **状态徽章 `stable` → `beta`**（橙色 `#E8960C`）
-
----
-
-## 📌 v23.7 (移除空目录创建)
-
-### ♻️ 清理
-- **移除 `main.py` 自动创建空 `tmp/temp/` 的逻辑**：各任务使用独立的 `tmp/N/temp/`，不再全局生成
-
----
-
-## 📌 v23.6 (OCR 采样优化)
-
-### 🎯 采样策略
-- **OCR 间隔 30s → 300s**：`attempt_starts` 改为 `[300, 600, 900, 1200]`，覆盖前 20 分钟，避免多段尝试落入无字幕空窗期
-
----
-
-## 📌 v23.5 (图像字幕 OCR 修复)
-
-### 🖼️ 图像字幕渲染
-- **恢复 `.sup` 文件作为 OCR 输入源**：`[1:s]` 绝对正确匹配字幕流，无全局索引错位问题
-- **移除 `overlay=shortest=1`**：避免因 `.sup` 文件 PTS 范围短导致输出帧数不足（实测仅 1 帧）
-- **输出 `-t 30`**：硬限制每次尝试渲染 30 帧，不依赖输入时长，防止无限循环
-
----
-
-## 📌 v23.4 (调试模式 + 代码清理)
-
-### 🐛 修复
-- 🩹 **调试模式保留文件**：`CacheManager.cleanup_after()` / `cleanup_all()` 支持 `debug_mode` 参数，仅清理 `temp/` 子目录，保留缓存视频和中间帧
-- 🩹 **`detect_from_file` 参数分离**：增加 `video_path` 和 `extracted_path`，视频路径与字幕文件路径不再混淆
-
----
-
-## 📌 v23.3 (缓存系统重构)
-
-### 🚀 新特性
-- **📦 本地缓存系统重构（CacheManager）**：
-  - UNC 路径自动判度（`\\192...` 走本地缓存，`C:/...` 直读），零配置
-  - 预缓存窗口从 1 个扩大到 **4 个**（含当前任务）
-  - 每个视频独立目录 `tmp/N/` + `tmp/N/temp/`，用完即焚
-  - Worker 等待缓存就绪，输出等待时间（如「等待 36 秒」）
-  - 处理完毕即时清理对应目录
-
-### ⚡ 优化
-- **⚡ 批量字幕提取 `extract_all()`**：单次 `mkvextract tracks` 提取全部字幕轨，只读一次源文件
-- **⚡ remux 直写 NAS**：`remux()` 新增 `orig_path` 参数，输出路径直接指向 NAS 原目录，省去本地搬运
-- **⚡ pipeline 参数化 `temp_dir`**：`analyze_file` / `process_file` / `process_tracks` 均支持外部传入临时目录
-
-### 📊 性能
-- **NAS 读取大幅降低**：实测 5.94GB 文件从约 **29.7GB → 6.17GB**（仅缓存一次 = 1× 读取 + 少量开销）
-
----
-
-## 📌 v23.2 (本地徽章 + 仓库公开)
-
-### 🎨 README 徽章
-- **本地 SVG 徽章**：不再依赖 `shields.io`，将 20 个 `for-the-badge` 风格 SVG 生成并存放于 `assets/badges/`
-- **按功能分组**：品牌 / AI 引擎 / 原生工具链 / 运行环境，共 4 行
-- **全链路内嵌**：徽章图片通过相对路径引用，断网或国内外网络差异均可正常显示
-
-### 🏠 仓库设置
-- **仓库转为公开**：`totocan/mkvtrackfix` 已改为 Public，任何人可访问、Star、Fork
-
----
-
-## 📌 v23.1 (README 优化)
-
-### 📝 文档
-- **README 顶部徽章栏**：仿 RapidOCR 风格，使用 `for-the-badge` 样式展示版本 / 许可 / AI 引擎 / 原生工具 / 运行环境
-- **致谢章节**：新增「🙏 致谢与开源引用」表格，列出全部 AI 项目、原生工具、Python 库、开放数据源
-- **第三方工具版本表**：明确 `build_portable.bat` 自动下载的工具版本（Python 3.11.9 / FFmpeg / MKVToolNix v100 / 7-Zip 9.20）
+### 效果
+调试模式仍保留最近一个失败任务的产物（`tmp/debug_last/`）供排查，**但磁盘占用有硬上限**，不再随任务数线性增长；成功任务实时释放空间。
 
 ---
 

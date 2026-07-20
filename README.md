@@ -1,55 +1,35 @@
-<div align="center">
-
-# 🎬 mkvtrackfix
-
-### 电影音轨 / 字幕标签批量修复工具
-
-**v23 · Active Development · Powered by Faster-Whisper + RapidOCR-OpenVINO + MKVToolNix**
-
-<br>
-
-<!-- 主品牌徽章 -->
-<a href="../../releases"><img src="assets/badges/version.svg" alt="Version v23"/></a>
-<a href="LICENSE"><img src="assets/badges/license.svg" alt="License GPL-3.0"/></a>
-<img src="assets/badges/semver.svg" alt="SemVer 2.0.0"/>
-<img src="assets/badges/status.svg" alt="Status stable"/>
-<img src="assets/badges/codestyle.svg" alt="Code style black"/>
-
-<br>
-
-<!-- AI / ML 引擎（开源关联，可点击） -->
-<a href="https://github.com/SYSTRAN/faster-whisper"><img src="assets/badges/whisper.svg" alt="faster-whisper (CTranslate2)" title="faster-whisper"/></a>
-<a href="https://github.com/RapidAI/RapidOCR"><img src="assets/badges/rapidocr.svg" alt="RapidOCR (OpenVINO)" title="RapidOCR"/></a>
-<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="assets/badges/modelscope.svg" alt="ModelScope 魔搭" title="ModelScope"/></a>
-<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="assets/badges/huggingface.svg" alt="HuggingFace Hub" title="HuggingFace"/></a>
-
-<br>
-
-<!-- 原生工具链（可点击主页） -->
-<a href="https://ffmpeg.org/"><img src="assets/badges/ffmpeg.svg" alt="ffmpeg" title="FFmpeg"/></a>
-<a href="https://mkvtoolnix.download/"><img src="assets/badges/mkvtoolnix.svg" alt="MKVToolNix" title="MKVToolNix"/></a>
-<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="assets/badges/pyqt5.svg" alt="PyQt5" title="PyQt5"/></a>
-<a href="https://www.themoviedb.org/"><img src="assets/badges/tmdb.svg" alt="TMDB" title="TMDB"/></a>
-<a href="https://github.com/giampaolo/psutil"><img src="assets/badges/psutil.svg" alt="psutil" title="psutil"/></a>
-
-<br>
-
-<!-- 运行环境 -->
-<a href="https://www.python.org/"><img src="assets/badges/python.svg" alt="Python"/></a>
-<img src="assets/badges/windows.svg" alt="Windows"/>
-<img src="assets/badges/nas.svg" alt="NAS Support"/>
-<a href="https://pypi.org/"><img src="assets/badges/pypi.svg" alt="PyPI"/></a>
-
-<br>
-
-[📥 下载便携版](../../releases) · [📝 更新日志](CHANGES.md) · [🐛 反馈问题](../../issues) · [📖 补充手册](READMEPLUS.md) · [⭐ Star](../../stargazers)
-
-</div>
+# 电影音轨 / 字幕标签批量修复工具（v23.16） mkvtrackfix
+- 批量修复 mp4 / mkv 电影的音轨与字幕语言标签，并把 mp4 重新封装为 mkv。
+- 支持 UNC 网络路径（NAS），带 GUI、AI 识别、非破坏式输出与干跑预览。
 
 ---
 
-- 批量修复 mp4 / mkv 电影的音轨与字幕语言标签，并把 mp4 重新封装为 mkv。
-- 支持 UNC 网络路径（NAS），带 GUI、AI 识别、非破坏式输出与干跑预览。
+## 项目说明
+
+我们在使用 NAS 囤积电影的核心问题是什么？资源来自五湖四海，必然混乱。
+
+除了音轨、字幕轨道超级多以外，标签的规范化是乱的，尤其是大量 `und` 标签。所以 mkvtrackfix 的核心就是**借助 AI 模型真正识别音轨语言、字幕语言，然后重新修订**；当然太多的音轨、字幕轨道我们也能顺带剔除——很多 30GB 的视频剔除不必要的字幕和音轨后，体积可减小到 24GB。实际我们只需要保留主要的字幕（如简中英双语），以及质量更好的普通话 / 英语音轨即可。
+
+同时健全标签命名和名称，在不同的播放器都一目了然。
+
+这些都解决了，最后我们**优化视频文件的命名**：简洁、直观，解决字符串冲突。因为很多朋友是从 Windows 把数据扔到 NAS（Linux），很可能 NAS 没处理好就看不到文件了——所以咱们这个工具就干这事。
+
+> 源码约 200KB（实际含注释约 290KB），支持库约 1.7GB 压缩包（可选 Patch 合并离线直接使用）。
+> 项目背景详见作者知乎专栏介绍。
+
+### 配图一览
+
+**① 轨道混乱 vs AI 自动化修复标签**
+
+![轨道混乱 vs AI 修复](assets/screenshot/14-track-chaos-vs-ai-fix.jpg)
+
+**② 媒体信息对比（修复前 / 修复后）**
+
+![媒体信息对比](assets/screenshot/15-media-info-compare.jpg)
+
+**③ 文件命名对比（修复前 / 修复后）**
+
+![文件命名对比](assets/screenshot/16-naming-compare.jpg)
 
 ---
 
@@ -64,23 +44,6 @@
 
 ---
 
-> **⚠️ 内测声明**
->
-> mkvtrackfix 目前处于 **活跃开发阶段**，功能与逻辑仍在持续迭代中。
->
-> 虽然工具设计上严格遵循 **非破坏式输出** 原则——所有处理均输出为
-> `.fixed.mkv` 或 `smart_rename` 命名的新文件，**绝不修改原始媒体文件**——
-> 但考虑到涉及 AI 识别、轨道编辑、mkvmerge 重封装等复杂操作，**强烈建议**：
->
-> - 首次使用前先在 **测试目录** 中对少量文件反复验证，确认策略符合预期
-> - 确认无误后再对正式媒体库执行批量处理
-> - 重要数据请提前备份
->
-> 因使用本工具导致的任何数据丢失、文件损坏或其他损失，开发者 **不承担责任**。
-> 请根据自身情况评估风险后使用。
-
----
-
 ## 快速开始（绿色便携版）
 
 1. 双击 **`build_portable.bat`**：自动下载便携 Python、安装依赖（含 RapidOCR）、下载 ffmpeg / mkvmerge。
@@ -89,6 +52,16 @@
 ---
 
 ## 主要变更
+
+### ✏️ v23.16 — 记录编辑器：删除行 + 断点续传
+- **表格右键「删除选中行」**：扫描后发现个别文件不行、或想剔除某条，右键直接删，自动同步清理内部状态。处理进行中自动禁用删除（提示先停止），避免错位。
+- **断点续传**：「保存记录」现在额外记录每行的处理状态与「已完成」标记；重新「导入记录」后，已完成的行**自动标绿**，再次「开始处理」时 Worker **自动跳过**它们，只跑剩余任务。无需手动删已完成行，也不会重复处理。
+- 完整闭环：扫描 → 右键删掉不行的 → 开始处理 → 中途失败「停止」→ 保存记录 → 重开导入 → 只处理剩下的。老版本（v1）记录兼容导入。
+
+### 🐛 v23.15 — 调试模式磁盘打满修复（重要）
+- **问题**：开启「调试模式」批量处理（如 73 个任务）会写满 C 盘（`[Errno 28] No space left on device`）。
+- **根因**：调试模式本意是保留当前任务中间产物供排查，但旧实现写成了**所有任务产物永久保留、跨任务不清理**——音频 WAV、PGS 字幕 OCR 帧、UNC 整片副本全部堆积在 `tmp/temp/`。
+- **修复（滑动窗口清理）**：成功/跳过任务立即清理；失败 + 调试仅保留最近一个失败任务的快照（`tmp/debug_last/`）；启动/收尾/关闭额外清理。磁盘占用从此**有硬上限**，不再随任务数线性增长，调试排查能力保留。
 
 ### v23 正式版
 - **托盘图标动画**：墨镜（待机）→ 放大镜（扫描）→ 齿轮（处理）→ 绿色对勾（完成）+ 提示音
@@ -111,9 +84,23 @@
 
 ## 使用流程
 
+### 基础三步
 1. 填写源路径（支持 UNC 网络路径），点「收集文件」
 2. 点「扫描并预览」→ 查看每条轨道的识别结果和计划动作
 3. 确认无误后点「开始处理」→ mkvmerge 转封装输出 `.fixed.mkv`
+
+### ✏️ 记录编辑：删掉不行的
+扫描后发现个别文件识别失败、或不想处理某几条？**在表格上右键 → 「删除选中行」**即可剔除，剩余任务照常处理——不必整批重来。
+
+### 🔁 断点续传：处理到一半也能接着跑
+大批量处理中途失败/想暂停？无需从头再来：
+
+1. 处理中遇问题，点「停止当前」让当前任务收尾；
+2. 点「保存记录」——记录里已自动标记哪些文件**处理成功（已完成）**；
+3. 关掉程序或修好环境后，点「导入记录」——已完成的行会**自动标绿**；
+4. 再点「开始处理」——Worker 会**自动跳过已完成**的文件，只处理剩下的。
+
+> 即便你手动右键删掉了已完成行再保存，行为也完全一致。断点续传的正确性依赖于「已完成的物理输出已落在 NAS 上」，非破坏式输出（`.fixed.mkv` / 重命名）不会因重跑而覆盖已有成果。
 
 ---
 
@@ -261,68 +248,3 @@ mediameta_fixer/
 | cmn-hant | cmn-hant | 繁体中文字幕（BCP 47） |
 
 > **🔒 兜底保护**：不在表中的任何语言码 → 自动降级为 `und`（未定义语言），保证 `mkvmerge` 绝不因语言码参数报错。
-
----
-
-## 🙏 致谢与开源引用
-
-mkvtrackfix 完全构建于开源社区的肩膀之上，**v23** 版本涉及的核心项目如下（按依赖层级排序）：
-
-### 🤖 AI / 机器学习
-| 项目 | 用途 | 链接 |
-|:-----|:-----|:-----|
-| **faster-whisper** | 音轨语种 AI 识别（CTranslate2 推理引擎，无需 PyTorch） | [github.com/SYSTRAN/faster-whisper](https://github.com/SYSTRAN/faster-whisper) |
-| **CTranslate2** | faster-whisper 底层推理框架 | [github.com/OpenNMT/CTranslate2](https://github.com/OpenNMT/CTranslate2) |
-| **RapidOCR** | PGS 字幕 OCR 引擎 | [github.com/RapidAI/RapidOCR](https://github.com/RapidAI/RapidOCR) |
-| **OpenVINO** | RapidOCR 推理后端（Intel CPU 加速） | [github.com/openvinotoolkit/openvino](https://github.com/openvinotoolkit/openvino) |
-| **ONNX Runtime** | 跨平台模型推理 | [onnxruntime.ai](https://onnxruntime.ai/) |
-| **ModelScope 魔搭** | 国内 faster-whisper 模型镜像源 | [modelscope.cn](https://www.modelscope.cn/) |
-| **HuggingFace** | 国际 faster-whisper 模型镜像源 | [huggingface.co/Systran](https://huggingface.co/Systran) |
-
-### 🛠️ 原生工具链
-| 工具 | 用途 | 链接 |
-|:-----|:-----|:-----|
-| **FFmpeg** | 音轨/字幕提取、抽帧 | [ffmpeg.org](https://ffmpeg.org/) |
-| **MKVToolNix v100** | MKV 转封装（IETF BCP 47 直写） | [mkvtoolnix.download](https://mkvtoolnix.download/) |
-| **7-Zip (7za920)** | 解压 MKVToolNix 便携包 | [7-zip.org](https://www.7-zip.org/) |
-
-### 🐍 Python 生态
-| 库 | 版本 | 用途 |
-|:---|:----:|:-----|
-| **PyQt5** | ≥5.15 | 跨平台 GUI 框架 |
-| **psutil** | ≥5.9 | 系统资源监控（CPU/内存/网络/磁盘） |
-| **requests** | ≥2.31 | TMDB 查询、模型下载 |
-| **langdetect** | ≥1.0.9 | 文本字幕语种辅助判定 |
-| **modelscope** | 最新 | 国内模型下载（按需自动安装） |
-
-### 🌐 开放数据
-| 来源 | 用途 | 链接 |
-|:-----|:-----|:-----|
-| **TMDB** | 电影产地/语言查询（纯 HTML 解析，无需 API Key） | [themoviedb.org](https://www.themoviedb.org/) |
-
-> 💡 **关于模型**：默认从 **ModelScope 魔搭社区** 下载（国内更快），失败自动回退到 **HuggingFace**。一次下载永久离线，存放在 `models/<size>/` 目录。
-
-> 💡 **关于许可证**：本项目基于 **GPL-3.0** 开源；如需商用请遵守上游各依赖项目的许可证条款。
-
----
-
-## 📦 第三方工具版本
-
-构建脚本 `build_portable.bat` 会自动下载下列便携工具：
-
-| 工具 | 发行版 | 下载源 |
-|:-----|:-------|:-------|
-| Python | 3.11.9 embed amd64 | python.org |
-| FFmpeg | latest essentials | gyan.dev |
-| MKVToolNix | 100.0 | mkvtoolnix.download |
-| 7-Zip | 9.20 (7za) | 7-zip.org |
-
----
-
-<div align="center">
-
-如果这个项目对你有帮助，欢迎 ⭐ Star 支持一下！
-
-<sub>Made with ❤️ by totocan · Powered by open source</sub>
-
-</div>

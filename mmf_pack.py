@@ -9,10 +9,8 @@ import os
 import zipfile
 
 
-# Directories never packed (ephemeral / regenerable / not part of the app)
+# Directories never packed (ephemeral / regenerable / not for distribution)
 EXCLUDE_DIRS = {"__pycache__", "logs", ".git", "tmp", "assets"}
-# - tmp/      : 运行时缓存目录（每个视频 tmp/N/），非分发内容
-# - assets/   : 文档资产（徽章 SVG / 截图），程序运行不引用，仅 README 使用
 # File extensions never packed (archives would self-recurse)
 EXCLUDE_EXT = {".zip", ".pptx", ".pyc"}
 
