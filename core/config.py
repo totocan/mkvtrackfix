@@ -22,8 +22,14 @@ import sys
 import shutil
 
 
-# 应用版本号：每次迭代 +1（同步修改此处和 README 即可）
-APP_VERSION = "v23"
+# 应用版本号（仅用于界面展示 / 日志署名，如标题栏的 v23.13）。
+# 注意：它**绝不**用于判断配置兼容性——配置兼容性由 SCHEMA_VERSION 决定，
+# 否则每次把 APP_VERSION 改成语义化版本（v23.13）都会把用户配置清空。
+APP_VERSION = "v23.13"
+
+# 配置结构版本号：仅当配置字段结构发生不兼容变更时才 +1。
+# 与 APP_VERSION 完全解耦——应用版本迭代不会触发用户配置重置。
+SCHEMA_VERSION = "1"
 
 
 DEFAULTS = {
@@ -89,8 +95,8 @@ DEFAULTS = {
     "source_path": "",
 }
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                           "..", "config.json")
+# 注意：配置路径统一由 resolve_config_path() 基于 app_root() 推导，
+# 不再使用硬编码于 core/ 父级的常量，避免源码/打包路径不一致导致的读写分裂。
 
 
 def _base_dir():
@@ -113,10 +119,12 @@ def app_root():
 
 def resolve_config_path():
     """确定配置文件路径：
-      - 优先放在 exe/脚本同目录（便于便携）；
-      - 若该目录不可写（如装进 Program Files），回退到 %APPDATA%。
+
+    - 统一放在 app_root()/config.json（程序根目录，与父目录叫什么无关——
+      只依赖「config.py 位于 core/ 子目录」或「exe 同级」这种层级关系）；
+    - 若该目录不可写（如装进 Program Files），回退到 %APPDATA%/MediaMetaFixer。
     """
-    p = os.path.join(_base_dir(), "config.json")
+    p = os.path.join(app_root(), "config.json")
     if os.path.exists(p):
         return p
     try:
@@ -177,22 +185,27 @@ def load(path=None):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            # v21.2: 检查 schema_version，版本不匹配时重置配置
+            # 配置兼容性只由 SCHEMA_VERSION 决定，与 APP_VERSION 解耦。
+            # 覆盖安装时旧 config 可能被覆盖（_schema_version 缺失/不同），
+            # 此时采用「合并」而非「清空」——保留用户改过的设置，只丢弃未知 key。
             stored_version = data.get("_schema_version", "")
-            if stored_version != APP_VERSION:
-                # 局部 import 避免循环导入
+            if stored_version != SCHEMA_VERSION:
                 try:
                     from . import logger as _lg
-                    _lg.log(f"配置版本从 {stored_version or '(无)'} 升级到 {APP_VERSION}，"
-                            f"恢复默认配置（保留工具路径）", "SYSTEM")
+                    _lg.log(f"配置结构升级（{stored_version or '(无)'} → {SCHEMA_VERSION}），"
+                            f"已合并保留原有设置", "SYSTEM")
                 except Exception:
                     pass
-                # 只保留探测到的工具路径
-                for k in _TOOL_PATH_KEYS:
-                    if k in data and data[k]:
-                        cfg[k] = data[k]
+                # 合并：默认值为底，用户的旧值覆盖（仅保留 DEFAULTS 中已知的 key）
+                merged = dict(DEFAULTS)
+                for k, v in data.items():
+                    if k in DEFAULTS:
+                        merged[k] = v
+                cfg = merged
             else:
                 cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
+            # 确保结构版本号写入内存态，供 save 落盘
+            cfg["_schema_version"] = SCHEMA_VERSION
         except Exception:
             pass
     # 每次启动都验证工具路径并重新探测（避免旧版残留绝对路径）
@@ -207,6 +220,8 @@ def save(cfg, path=None):
     # 保存前也做相对化处理，避免写入绝对路径
     cfg = normalize_tool_paths(cfg)
     data = {k: cfg.get(k, v) for k, v in DEFAULTS.items()}
+    # 显式写入结构版本号，确保覆盖安装后 load 不会再次误判升级
+    data["_schema_version"] = SCHEMA_VERSION
     try:
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:

@@ -1,5 +1,22 @@
 # MediaMetaFixer 变更说明
 
+## 📌 v23.14 (配置兼容性修复 — 覆盖安装不再丢配置)
+
+### 🛡️ 修复（配置兼容性，严重）
+- **🐞 根因**：`config.py` 用应用版本号 `APP_VERSION`（如 `v23`）做配置兼容性判断，
+  覆盖安装时新版本的 config.json 覆盖了旧配置（无论有无 `_schema_version`），
+  `load()` 判定版本不匹配 → **清空用户全部自定义配置并重置**，导致反复「配置升级」日志、设置丢失
+- **✅ schema 版本与应用版本解耦**：新增 `SCHEMA_VERSION="1"`，**仅它**决定配置兼容性；
+  `APP_VERSION`（如 `v23.13`）仅用于界面/日志署名，改应用版本不再触发配置重置
+- **✅ 升级改为合并而非清空**：`_schema_version` 不匹配时 `{**DEFAULTS, **用户旧值}` 合并，
+  保留用户改过的字体 / 调试 / 重命名 / TMDB 等设置，只丢弃 DEFAULTS 外的未知 key
+- **✅ 路径统一**：`resolve_config_path()` 改基于 `app_root()`（层级关系推导，不假设父目录名，
+  无论 `mediameta_fixer` / `mkvtrackfix-main` / `mkvtrackfix v9` 都正确），删除误导的 `CONFIG_PATH` 常量
+- **✅ save 显式写出 `_schema_version`**：覆盖安装后首次启动自动修好 config，不再反复升级
+- **✅ 不硬编码父目录名**：全代码库确认无 `mediameta_fixer` / `mkvtrackfix-*` 等目录名假设，迁移/改名无损
+
+---
+
 ## 📌 v23.13 (缓存丢失自愈 + 单任务失败不卡死)
 
 ### 🛡️ 修复（健壮性，严重）
