@@ -23,7 +23,7 @@ import shutil
 
 
 # 应用版本号：每次迭代 +1（同步修改此处和 README 即可）
-APP_VERSION = "v23.21"
+APP_VERSION = "v23.22"
 
 
 DEFAULTS = {
@@ -82,6 +82,7 @@ DEFAULTS = {
 
     # —— 调试 ——
     "debug_mode": False,
+    "keep_ocr_frames": False,    # v23.21: 保留OCR帧/WAV文件供排查（不清tmp/N/temp/）
 
     # —— 源 ——
     "recursive": True,

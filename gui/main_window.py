@@ -64,7 +64,8 @@ class CacheManager:
     - 滑动窗口清理：完成任务 N 后清理 N-2（保留当前 + 前 1 个）。
     - 磁盘感知：失败快照按时间排序，磁盘不足时删旧留新。
     """
-    def __init__(self, files, cache_root, log_callback, skip_paths=None):
+    def __init__(self, files, cache_root, log_callback, skip_paths=None,
+                 keep_temp=False):
         self.files = files
         self.cache_root = cache_root
         self.log_callback = log_callback
@@ -76,6 +77,8 @@ class CacheManager:
         self._thread = None
         # v23.20: 跳过已完成的文件，不浪费预缓存
         self._skip_set = set(skip_paths or [])
+        # v23.21: 保留 temp/ 子目录（OCR帧/音轨WAV）不清理
+        self._keep_temp = keep_temp
 
     @property
     def current_idx(self):
@@ -226,6 +229,8 @@ class CacheManager:
           - 任务 2 完成：不清理（只到 1）
           - 任务 3 完成：清理 tmp/1/
           - 任务 4 完成：清理 tmp/2/
+
+        v23.21: 若 _keep_temp=True，只删除视频缓存文件，保留 temp/ 子目录（OCR帧/WAV）。
         """
         keep = {idx_0based, idx_0based - 1}
         for name in os.listdir(self.cache_root):
@@ -233,9 +238,19 @@ class CacheManager:
                 continue
             n = int(name) - 1  # 1-based → 0-based
             if n not in keep:
+                td = os.path.join(self.cache_root, name)
                 try:
-                    shutil.rmtree(os.path.join(self.cache_root, name),
-                                  ignore_errors=True)
+                    if self._keep_temp:
+                        # 只删视频缓存，保留 temp/（OCR帧、音轨WAV）
+                        for entry in os.listdir(td):
+                            fp = os.path.join(td, entry)
+                            if entry != "temp":
+                                if os.path.isdir(fp):
+                                    shutil.rmtree(fp, ignore_errors=True)
+                                else:
+                                    os.remove(fp)
+                    else:
+                        shutil.rmtree(td, ignore_errors=True)
                 except Exception:
                     pass
 
@@ -438,9 +453,12 @@ class Worker(QThread):
         from core import config as _cfg
         tmp_root = os.path.join(_cfg.app_root(), "tmp")
         # v23.20: 传入已完成集合，背景缓存线程跳过这些文件，不浪费硬盘
+        # v23.21: 传入 keep_ocr_frames 配置，开启时滑动窗口保留 temp/ 子目录
+        keep_temp = bool(self.cfg_override.get("keep_ocr_frames", False))
         self.cache = CacheManager(self.files, tmp_root,
                                    lambda m: self._log(m, "cache"),
-                                   skip_paths=self.skip_done_paths)
+                                   skip_paths=self.skip_done_paths,
+                                   keep_temp=keep_temp)
         self.cache.start()
         # v23.15: 启动前清掉历史残留
         self._purge_stale_temp_on_start()

@@ -228,12 +228,12 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
     if segment_start is not None:
         attempt_starts = [segment_start]
     else:
-        attempt_starts = [skip_sec + i * 300 for i in range(max_attempts)]
+        attempt_starts = [skip_sec * (i + 1) for i in range(max_attempts)]
     per_attempt_duration = 30
     frame_dir = os.path.join(temp_dir, f"ocr_sub{sub_stream_index}")
     os.makedirs(frame_dir, exist_ok=True)
     ffmpeg_path = (config or {}).get("ffmpeg_path", "ffmpeg")
-    clean_frame_dir = not cfg.get("debug_mode", False)
+    clean_frame_dir = not (cfg.get("debug_mode", False) or cfg.get("keep_ocr_frames", False))
     for attempt_idx, ocr_seek in enumerate(attempt_starts):
         if clean_frame_dir:
             for old in os.listdir(frame_dir):
@@ -248,8 +248,7 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
                 "-f", "lavfi", "-i", "color=c=black:s=1920x1080:r=1",
                 "-ss", str(ocr_seek), "-t", str(per_attempt_duration),
                 "-i", sub_input,
-                "-filter_complex", "[0:v][1:s]overlay",
-                "-t", str(per_attempt_duration),
+                "-filter_complex", "[0:v][1:s]overlay=shortest=1",
                 os.path.join(frame_dir, "frame_%04d.png")
             ]
         else:
@@ -260,8 +259,7 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
                 "-ss", str(ocr_seek), "-t", str(per_attempt_duration),
                 "-i", clean_src,
                 "-filter_complex",
-                f"[0:v][1:{sub_stream_index}]overlay",
-                "-t", str(per_attempt_duration),
+                f"[0:v][1:{sub_stream_index}]overlay=shortest=1",
                 os.path.join(frame_dir, "frame_%04d.png")
             ]
         _log_to_ai_worker(f"[OCR_EXEC] {' '.join(cmd)}")
@@ -367,7 +365,7 @@ def detect(track, src_path, temp_dir, config, orig_path=None, existing_file=None
                     "note": f"抽取失败且无法推断: {reason_brief}"}
 
     if is_image:
-        # 图像字幕：从提取的 .sup 文件渲染帧（[1:s] 绝对正确匹配字幕流）
+        # 全帧单次提取 OCR（不使用 -ss 分段，避免跳跃段无字幕帧）
         ocr_res = _ocr_with_tesseract(
             src_path, track.stream_index, config, temp_dir, sub_path=tmp_out)
         if ocr_res is None:
@@ -449,102 +447,11 @@ def extract_only(track, src_path, temp_dir, config):
 
 
 # v22: 字幕提取与检测分离 — 对已提取的文件做 OCR + 语言检测
-def extract_all(tracks, src_path, temp_dir, config):
-    """一次性提取所有字幕轨道，单次 mkvextract 调用，只读一次源文件。
-
-    参数：
-      tracks  — 全部轨道列表（自动过滤 subtitle 类型）
-      src_path — 源视频路径（本地缓存或 NAS）
-      temp_dir  — 临时工作目录（每个视频各自的 tmp/N/temp/）
-      config   — 配置字典
-
-    返回：
-      {track_id: 提取文件路径, ...} 或 {}（批量失败时返回空，由上游逐条回退）
-    """
-    from . import config as cfg_mod
-    mkvextract_path = "tools/mkvtoolnix/mkvextract.exe"
-    if config and "ffmpeg_path" in config:
-        ffmpeg_dir = os.path.dirname(config["ffmpeg_path"])
-        possible_mkv = os.path.join(ffmpeg_dir, "mkvtoolnix", "mkvextract.exe")
-        if os.path.exists(possible_mkv):
-            mkvextract_path = possible_mkv
-
-    track_specs = []
-    result = {}  # track_id -> extracted path
-
-    for t in tracks:
-        if t.track_type != "subtitle":
-            continue
-        codec = t.codec.lower()
-        is_image = codec in IMAGE_CODECS
-        ext = _ext_for(codec) if not is_image else ".sup"
-        tmp_out = os.path.join(temp_dir, f"sub_{t.track_id}{ext}")
-        if os.path.exists(tmp_out) and os.path.getsize(tmp_out) > 0:
-            result[t.track_id] = tmp_out
-            continue
-        track_specs.append(f"{t.stream_index}:{_clean_windows_path(tmp_out)}")
-        result[t.track_id] = tmp_out
-
-    if not track_specs:
-        return result  # 全部已存在或没有字幕轨道
-
-    clean_src = _clean_windows_path(src_path)
-    cmd = [mkvextract_path, "tracks", clean_src] + track_specs
-
-    _log_to_ai_worker(f"[SUBTITLE_BATCH_EXEC] 批量提取字幕: {' '.join(cmd)}")
-
-    startupinfo = None
-    if os.name == 'nt':
-        startupinfo = subprocess.STARTUPINFO()
-        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
-    timeout = (config or {}).get("subtitle_extract_timeout", 180)
-    # 批量提取超时适当放大（轨道数 × 单轨超时）
-    batch_timeout = timeout * max(1, len(track_specs))
-
-    try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             cwd=cfg_mod.app_root() if hasattr(cfg_mod, 'app_root') else None,
-                             startupinfo=startupinfo)
-        stdout, stderr = p.communicate(timeout=batch_timeout)
-        rc = p.returncode
-        if rc != 0:
-            err_msg = stderr.decode('utf-8', errors='ignore') or stdout.decode('utf-8', errors='ignore')
-            _log_to_ai_worker(f"[SUBTITLE_BATCH_FAIL] 批量提取失败 rc={rc}: {err_msg[:200]}")
-            return {}  # 批量失败，让上游逐条回退
-        _log_to_ai_worker(f"[SUBTITLE_BATCH_SUCCESS] 批量提取完成: {len(track_specs)} 条轨道")
-        # 验证每个提取文件存在
-        valid = {}
-        for track_id, path in result.items():
-            if os.path.exists(path) and os.path.getsize(path) > 0:
-                valid[track_id] = path
-        return valid
-    except subprocess.TimeoutExpired:
-        p.kill()
-        p.communicate()
-        _log_to_ai_worker(f"[SUBTITLE_BATCH_TIMEOUT] 批量提取超时({batch_timeout}s)")
-        return {}
-    except Exception as e:
-        _log_to_ai_worker(f"[SUBTITLE_BATCH_ERR] 批量提取异常: {e}")
-        if 'p' in locals() and p:
-            p.kill()
-            p.communicate()
-        return {}
-
-
-def detect_from_file(track, video_path, extracted_path, temp_dir, config, orig_path=None):
+def detect_from_file(track, extracted_path, temp_dir, config, orig_path=None):
     """
     对已提取的字幕文件做 OCR + 语言检测。
-
-    参数：
-      track — 字幕轨道对象
-      video_path — 源视频路径（本地缓存），用于图像字幕的帧渲染
-      extracted_path — 已提取的字幕文件路径（跳过 mkvextract）
-      temp_dir  — 临时工作目录
-      config   — 配置字典
-      orig_path — NAS 原始路径，用于启发式推断
-
     返回与 detect() 相同的 dict。
+    通过 existing_file 参数跳过内部提取步骤。
     """
-    return detect(track, video_path, temp_dir, config,
+    return detect(track, extracted_path, temp_dir, config,
                   orig_path=orig_path, existing_file=extracted_path)
