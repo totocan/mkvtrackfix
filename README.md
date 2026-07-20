@@ -8,28 +8,19 @@
 
 我们在使用 NAS 囤积电影的核心问题是什么？资源来自五湖四海，必然混乱。
 
+![轨道混乱 vs AI 修复](assets/screenshot/14-track-chaos-vs-ai-fix.jpg)
+
 除了音轨、字幕轨道超级多以外，标签的规范化是乱的，尤其是大量 `und` 标签。所以 mkvtrackfix 的核心就是**借助 AI 模型真正识别音轨语言、字幕语言，然后重新修订**；当然太多的音轨、字幕轨道我们也能顺带剔除——很多 30GB 的视频剔除不必要的字幕和音轨后，体积可减小到 24GB。实际我们只需要保留主要的字幕（如简中英双语），以及质量更好的普通话 / 英语音轨即可。
 
+![媒体信息对比](assets/screenshot/15-media-info-compare.jpg)
+
 同时健全标签命名和名称，在不同的播放器都一目了然。
+
+![文件命名对比](assets/screenshot/16-naming-compare.jpg)
 
 这些都解决了，最后我们**优化视频文件的命名**：简洁、直观，解决字符串冲突。因为很多朋友是从 Windows 把数据扔到 NAS（Linux），很可能 NAS 没处理好就看不到文件了——所以咱们这个工具就干这事。
 
 > 源码约 200KB（实际含注释约 290KB），支持库约 1.7GB 压缩包（可选 Patch 合并离线直接使用）。
-> 项目背景详见作者知乎专栏介绍。
-
-### 配图一览
-
-**① 轨道混乱 vs AI 自动化修复标签**
-
-![轨道混乱 vs AI 修复](assets/screenshot/14-track-chaos-vs-ai-fix.jpg)
-
-**② 媒体信息对比（修复前 / 修复后）**
-
-![媒体信息对比](assets/screenshot/15-media-info-compare.jpg)
-
-**③ 文件命名对比（修复前 / 修复后）**
-
-![文件命名对比](assets/screenshot/16-naming-compare.jpg)
 
 ---
 
