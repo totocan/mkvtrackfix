@@ -289,12 +289,16 @@ class SettingsDialog(QDialog):
         rl.setContentsMargins(16, 16, 16, 16)
         rl.setAlignment(Qt.AlignTop)
 
+        from PyQt5.QtGui import QFont
+
         title = QLabel("🍚 在线要饭")
-        title.setStyleSheet("font-size:26px; font-weight:bold; color:#333;")
+        title.setFont(QFont("Microsoft YaHei", 22, QFont.Bold))
+        title.setStyleSheet("color:#333;")
         rl.addWidget(title)
 
         subtitle = QLabel("纯属随缘，不锁任何功能")
-        subtitle.setStyleSheet("font-size:15px; color:#888; margin-bottom:12px;")
+        subtitle.setFont(QFont("Microsoft YaHei", 13))
+        subtitle.setStyleSheet("color:#888; margin-bottom:12px;")
         rl.addWidget(subtitle)
 
         # 赞赏码
@@ -303,13 +307,14 @@ class SettingsDialog(QDialog):
         self.lbl_donate_qr.setStyleSheet("border:1px solid #ddd; padding:8px; background:#fff;")
         rl.addWidget(self.lbl_donate_qr, 0, Qt.AlignCenter)
 
-        rl.addSpacing(16)
+        rl.addSpacing(12)
 
         thanks = QLabel(
             "如果这个工具正合你心意\n"
             "在线要饭一下？\n\n"
             "感谢你的 ❤️")
-        thanks.setStyleSheet("font-size:17px; color:#555; line-height:2.0;")
+        thanks.setFont(QFont("Microsoft YaHei", 14))
+        thanks.setStyleSheet("color:#555;")
         thanks.setWordWrap(True)
         thanks.setAlignment(Qt.AlignCenter)
         rl.addWidget(thanks)
