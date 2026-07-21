@@ -493,6 +493,8 @@ class Worker(QThread):
                 self.file_done.emit(i, "", "已取消", "warn", "")
                 break
             self.file_start.emit(i)
+            # v23.36: 通知缓存线程当前任务下标，确保预缓存 N+1、N+2
+            self.cache.current_idx = i
             success = True
             try:
                 if self.mode == "scan":
