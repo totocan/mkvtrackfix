@@ -466,9 +466,20 @@ class Worker(QThread):
                     task_tmp = os.path.join(tmp_root, str(i + 1), "temp")
                     os.makedirs(task_tmp, exist_ok=True)
                     self._log(f"分析: {f}")
-                    tracks, _ = pipeline.analyze_file(
-                        src, self.cfg, log=lambda m, l="info": self._log(m, l),
-                        orig_path=f, temp_dir=task_tmp)
+                    try:
+                        tracks, _ = pipeline.analyze_file(
+                            src, self.cfg, log=lambda m, l="info": self._log(m, l),
+                            orig_path=f, temp_dir=task_tmp)
+                    except Exception:
+                        if local and local != f:
+                            # v23.29: 缓存文件不可用 → 回退直读 NAS
+                            self._log(f"[缓存] 本地文件不可用，回退直读 NAS: {os.path.basename(f)}")
+                            src = f
+                            tracks, _ = pipeline.analyze_file(
+                                src, self.cfg, log=lambda m, l="info": self._log(m, l),
+                                orig_path=f, temp_dir=task_tmp)
+                        else:
+                            raise
                     self.results[f] = tracks
                     # v22: 所有识别失败 → 跳过
                     if _any_track_failed(tracks):
@@ -501,14 +512,36 @@ class Worker(QThread):
                             if pct - _last_pct[0] >= 10 or pct == 0:
                                 self._log(f"  转封装进度: {pct}%", "info")
                                 _last_pct[0] = pct
-                        ok, out, msg, _ = pipeline.process_tracks(
-                            src, cached, run_cfg,
-                            log=lambda m, l="info": self._log(m, l),
-                            progress_callback=_on_remux_progress)
+                        try:
+                            ok, out, msg, _ = pipeline.process_tracks(
+                                src, cached, run_cfg,
+                                log=lambda m, l="info": self._log(m, l),
+                                progress_callback=_on_remux_progress)
+                        except Exception:
+                            if local and local != f:
+                                # v23.29: 缓存文件不可用 → 回退直读 NAS
+                                self._log(f"[缓存] 本地文件不可用，回退直读 NAS: {os.path.basename(f)}")
+                                src = f
+                                ok, out, msg, _ = pipeline.process_tracks(
+                                    src, cached, run_cfg,
+                                    log=lambda m, l="info": self._log(m, l),
+                                    progress_callback=_on_remux_progress)
+                            else:
+                                raise
                     else:
-                        ok, out, msg, tracks = pipeline.process_file(
-                            src, run_cfg,
-                            log=lambda m, l="info": self._log(m, l))
+                        try:
+                            ok, out, msg, tracks = pipeline.process_file(
+                                src, run_cfg,
+                                log=lambda m, l="info": self._log(m, l))
+                        except Exception:
+                            if local and local != f:
+                                self._log(f"[缓存] 本地文件不可用，回退直读 NAS: {os.path.basename(f)}")
+                                src = f
+                                ok, out, msg, tracks = pipeline.process_file(
+                                    src, run_cfg,
+                                    log=lambda m, l="info": self._log(m, l))
+                            else:
+                                raise
                         self.results[f] = tracks
                     # v23.18: 输出在 tmp/N/ 中，搬回 NAS 原始目录
                     out_path = self._relocate_output(f, out or "")
