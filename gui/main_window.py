@@ -32,7 +32,7 @@ from PyQt5.QtWidgets import (
     QHeaderView, QProgressBar, QFileDialog, QMenu, QAction,
     QAbstractItemView, QLabel, QDialog, QMessageBox,
 )
-from PyQt5.QtCore import QThread, pyqtSignal, QUrl, Qt, QTimer
+from PyQt5.QtCore import QThread, pyqtSignal, QUrl, Qt, QTimer, QTranslator, QLocale, QLibraryInfo
 from PyQt5.QtGui import QFont, QColor, QIcon, QDragEnterEvent, QDropEvent, QDesktopServices
 
 from core import pipeline, probe, config as config_mod, utils
@@ -1583,6 +1583,10 @@ class MainWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MediaMetaFixer")
+    # v23.39: 加载 Qt 中文翻译（使滚动条 Tooltip 等内置文本显示中文）
+    _tr = QTranslator()
+    if _tr.load(QLocale.system(), 'qt', '_', QLibraryInfo.location(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(_tr)
     w = MainWindow()
     w.show()
     # 在 show() 之后调 showMaximized() 才生效（之前在 _init_ui 里调会被忽略）

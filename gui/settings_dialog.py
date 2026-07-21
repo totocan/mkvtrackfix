@@ -314,16 +314,28 @@ class SettingsDialog(QDialog):
         thanks.setAlignment(Qt.AlignCenter)
         rl.addWidget(thanks)
 
+        # 底部弹簧：把按钮推到底部
         rl.addStretch()
+
+        # 确定 / 取消（在右侧赞赏区底部居中）
+        btn_row = QHBoxLayout()
+        btn_row.setAlignment(Qt.AlignCenter)
+        btn_ok = QPushButton("确定")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(self.reject)
+        btn_ok.setFixedWidth(100)
+        btn_cancel.setFixedWidth(100)
+        btn_row.addWidget(btn_ok)
+        btn_row.addSpacing(20)
+        btn_row.addWidget(btn_cancel)
+        rl.addLayout(btn_row)
+        rl.addSpacing(12)
+
         h_split.addWidget(right_panel, 4)  # 右侧 40%
 
-        # ---------- 底部：分栏 + 按钮 ----------
+        # ---------- 底部：分栏 ----------
         outer.addLayout(h_split)
-        btns = QDialogButtonBox(
-            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        btns.accepted.connect(self.accept)
-        btns.rejected.connect(self.reject)
-        outer.addWidget(btns)
 
     def _browse_row(self, form, label, line_edit, exe=False):
         h = QHBoxLayout()
