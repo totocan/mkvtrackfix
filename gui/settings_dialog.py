@@ -38,8 +38,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.cfg = cfg
         self.setWindowTitle("设置")
-        # v15：默认 1500×800，4K/高分屏够用 + 可拖拽缩放
-        self.resize(1500, 800)
+        # v23.39：1800×900，预留足够空间给右侧赞赏区
+        self.resize(1800, 900)
         self._build()
         self._load()
 
@@ -290,11 +290,11 @@ class SettingsDialog(QDialog):
         rl.setAlignment(Qt.AlignTop)
 
         title = QLabel("🍚 在线要饭")
-        title.setStyleSheet("font-size:22px; font-weight:bold; color:#333;")
+        title.setStyleSheet("font-size:26px; font-weight:bold; color:#333;")
         rl.addWidget(title)
 
         subtitle = QLabel("纯属随缘，不锁任何功能")
-        subtitle.setStyleSheet("font-size:13px; color:#888; margin-bottom:10px;")
+        subtitle.setStyleSheet("font-size:15px; color:#888; margin-bottom:12px;")
         rl.addWidget(subtitle)
 
         # 赞赏码
@@ -309,7 +309,7 @@ class SettingsDialog(QDialog):
             "如果这个工具正合你心意\n"
             "在线要饭一下？\n\n"
             "感谢你的 ❤️")
-        thanks.setStyleSheet("font-size:14px; color:#555; line-height:1.8;")
+        thanks.setStyleSheet("font-size:17px; color:#555; line-height:2.0;")
         thanks.setWordWrap(True)
         thanks.setAlignment(Qt.AlignCenter)
         rl.addWidget(thanks)
