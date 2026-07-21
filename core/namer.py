@@ -66,6 +66,20 @@ def _sanitize(text):
     return t.strip(".")
 
 
+# ── 音轨编码名简化（用于文件名，避免过长） ──
+_AUDIO_CODEC_SIMPLE = {
+    "dts hd master audio": "DTS-HD.MA",
+    "dts-hd master audio": "DTS-HD.MA",
+    "dts hd high resolution": "DTS-HiRes",
+    "dts-hd high resolution": "DTS-HiRes",
+    "truehd atmos": "TrueHD",
+    "truehd": "TrueHD",
+    "dolby digital plus": "DOLBY.DiPlus",
+    "dolby digital": "AC-3",
+    "e-ac-3": "E-AC3",
+    "eac3": "E-AC3",
+}
+
 def _track_name_audio_info(track_name):
     """从 track_name（如 'French [FLAC 2.0]'）解析编码和声道。
 
@@ -75,7 +89,10 @@ def _track_name_audio_info(track_name):
         return "", ""
     m = re.search(r"\[(.+?)\s+(\d+\.\d+)\]", track_name)
     if m:
-        return m.group(1), m.group(2)
+        raw = m.group(1).strip()
+        # v23.46: 简化编码名
+        simplified = _AUDIO_CODEC_SIMPLE.get(raw.lower(), raw)
+        return simplified, m.group(2)
     # 带单个数字声道，如 [AC-3 6ch]
     m = re.search(r"\[(.+?)\s+(\d+)ch\]", track_name)
     if m:

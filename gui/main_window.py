@@ -1156,6 +1156,20 @@ class MainWindow(QMainWindow):
             if 0 <= row < len(self.files):
                 self._task_skipped.append(self.files[row])
 
+        # v23.46: 自动保存（每个任务完成后，非跳过状态）
+        if "自动跳过" not in (status or ""):
+            task_time = ""
+            if self._task_start:
+                seconds = int((datetime.datetime.now() - self._task_start).total_seconds())
+                if seconds >= 60:
+                    task_time = f"{seconds//60}分{seconds%60}秒"
+                else:
+                    task_time = f"{seconds}秒"
+            self._auto_save_record()
+            elapsed = int((datetime.datetime.now() - self._task_start).total_seconds()) if self._task_start else 0
+            time_str = f"{elapsed//60}分{elapsed%60}秒" if elapsed >= 60 else f"{elapsed}秒"
+            self.log.log(f"✓ 任务 {row + 1}/{len(self.files)} 已完成(用时{time_str})，记录已自动保存", "ok")
+
     def _on_finished(self):
         self._auto_scroll_timer.stop()
         self._pending_scroll_row = -1
@@ -1359,6 +1373,46 @@ class MainWindow(QMainWindow):
         if dlg.exec_() == QDialog.Accepted:
             self._reload_config()
 
+    # v23.46: 自动保存（不弹对话框，覆盖写入 mmf_autosave.json）
+    def _auto_save_record(self):
+        import json
+        if not self.files:
+            return
+        records_dir = os.path.join(config_mod.app_root(), "records")
+        os.makedirs(records_dir, exist_ok=True)
+        fpath = os.path.join(records_dir, "mmf_autosave.json")
+        data = {
+            "version": 2,
+            "timestamp": datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "files": [],
+        }
+        for i, f in enumerate(self.files):
+            status = ""
+            plan = ""
+            if 0 <= i < self.table.rowCount():
+                it5 = self.table.item(i, 5)
+                it4 = self.table.item(i, 4)
+                if it5: status = it5.text()
+                if it4: plan = it4.text()
+            tracks = self.results.get(f, [])
+            done = (("完成" in status) or ("已分析" in status)) and ("失败" not in status)
+            data["files"].append({
+                "path": f, "status": status, "plan": plan, "done": bool(done),
+                "tracks": [{
+                    "id": t.track_id, "type": t.track_type,
+                    "detected_iso": getattr(t, "detected_iso", ""),
+                    "detected_name": getattr(t, "detected_name", ""),
+                    "detected_kind": getattr(t, "detected_kind", ""),
+                    "action": getattr(t, "action", "keep"),
+                    "track_name": getattr(t, "track_name", ""),
+                } for t in tracks if t.track_type in ("audio", "subtitle")],
+            })
+        try:
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def save_record(self):
         """v23.16: 保存扫描/处理记录，含每行状态与已完成标记，支持断点续传。"""
         if not self.files:
@@ -1561,10 +1615,14 @@ class MainWindow(QMainWindow):
             f"已清理 {deleted}/{len(logs)} 个日志文件。")
 
     def closeEvent(self, event):
-        """主窗口关闭时触发：注销 Worker 线程及后台预下载线程，并清扫缓存目录"""
+        """关闭窗口时：任务运行中阻止关闭（防误触），空闲时正常清理退出。"""
+        if self.worker and self.worker.isRunning():
+            self.log.log("⛔ 任务正在进行，无法关闭。请先点击「停止当前」或使用菜单「退出」。", "warn")
+            event.ignore()
+            return
         try:
             if self.worker:
-                self.log.log("正在强行结束后台线程并清理临时磁盘文件...", "warn")
+                self.log.log("正在清理临时磁盘文件...", "warn")
                 self.worker.stop()
                 self.worker.wait(3000)  # 最多等 3 秒让其释放文件句柄并退出
             
