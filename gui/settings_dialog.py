@@ -71,9 +71,9 @@ class SettingsDialog(QDialog):
         self.le_sample_segments = QLineEdit()
         self.le_sample_segments.setPlaceholderText("600,1000,1500")
         self._row(f1, "音轨采样起点(逗号分隔,秒)", self.le_sample_segments)
-        self.sp_sample_duration = QSpinBox()
-        self.sp_sample_duration.setRange(10, 600)
-        self._row(f1, "每段采样时长(秒)", self.sp_sample_duration)
+        self.c_sample_duration = QComboBox()
+        self.c_sample_duration.addItems(["5", "10", "15", "20"])
+        self._row(f1, "每段采样时长(秒)", self.c_sample_duration)
         self.c_zh = QComboBox()
         self.c_zh.addItems(["cmn", "yue"])
         self._row(f1, "中文(zh)默认映射", self.c_zh)
@@ -283,7 +283,9 @@ class SettingsDialog(QDialog):
         self.c_compute.setCurrentText(c.get("compute_type", _D.get("compute_type", "int8")))
         self.sp_threads.setValue(int(c.get("cpu_threads", _D.get("cpu_threads", 0))))
         self.le_sample_segments.setText(c.get("sample_segments", _D.get("sample_segments", "600,1000,1500")))
-        self.sp_sample_duration.setValue(int(c.get("sample_duration_seconds", _D.get("sample_duration_seconds", 10))))
+        idx = self.c_sample_duration.findText(str(int(c.get("sample_duration_seconds", 10))))
+        if idx >= 0:
+            self.c_sample_duration.setCurrentIndex(idx)
         self.c_zh.setCurrentText(c.get("zh_audio_as", _D.get("zh_audio_as", "cmn")))
         self.c_redetect.setCurrentText(c.get("audio_redetect", _D.get("audio_redetect", "all")))
         self.le_mkv.setText(c.get("mkvmerge_path", "") or "")
@@ -334,7 +336,7 @@ class SettingsDialog(QDialog):
             c["compute_type"] = self.c_compute.currentText()
             c["cpu_threads"] = self.sp_threads.value()
             c["sample_segments"] = self.le_sample_segments.text().strip() or "600,1000,1500"
-            c["sample_duration_seconds"] = self.sp_sample_duration.value()
+            c["sample_duration_seconds"] = int(self.c_sample_duration.currentText())
             c["zh_audio_as"] = self.c_zh.currentText()
             c["audio_redetect"] = self.c_redetect.currentText()
             # 工具路径（若是程序目录内路径则存相对路径，便于迁移）

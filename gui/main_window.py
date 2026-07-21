@@ -578,6 +578,12 @@ class MainWindow(QMainWindow):
         self.results = {}
         self._track_data = {}
         self._completed = {}          # v23.16: path -> (status, level)，已成功完成的文件
+        # v23.26: 表格自动滚动到当前任务
+        self._last_scroll_interaction = time.time()
+        self._auto_scroll_timer = QTimer(self)
+        self._auto_scroll_timer.timeout.connect(self._auto_scroll_tick)
+        self._auto_scroll_timer.setSingleShot(True)
+        self._pending_scroll_row = -1
         self.worker = None
         self.worker_cfg_override = None
         self._saved_after_last_mod = True
@@ -718,6 +724,8 @@ class MainWindow(QMainWindow):
         # v23.16: 右键菜单（删除选中行）
         self.table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._on_table_context_menu)
+        # v23.26: 用户手动滚动时记录交互时间
+        self.table.verticalScrollBar().valueChanged.connect(self._on_table_scrolled)
         v.addWidget(self.table, 3)
 
         # Controls + progress
@@ -1028,9 +1036,34 @@ class MainWindow(QMainWindow):
             item.setBackground(color)
             item.setForeground(QColor("#ffffff"))
 
+    # v23.26: 表格自动滚动到当前任务
+    def _on_table_scrolled(self, value):
+        """用户手动滚动 → 重置闲置计时，取消延迟跳转。"""
+        self._last_scroll_interaction = time.time()
+        self._auto_scroll_timer.stop()
+        self._pending_scroll_row = -1
+
+    def _auto_scroll_tick(self):
+        """闲置超时 → 恢复自动滚动到延迟的行。"""
+        if self._pending_scroll_row >= 0:
+            row = self._pending_scroll_row
+            self._pending_scroll_row = -1
+            if row < self.table.rowCount():
+                self.table.scrollToItem(self.table.item(row, 0),
+                                        QAbstractItemView.PositionAtCenter)
+
     def _on_file_start(self, row):
-        """文件开始处理 → 整行淡蓝。"""
+        """文件开始处理 → 整行淡蓝 + 自动滚动。"""
         self._set_row_color(row, QColor("#1a5276"))
+        # v23.26: 如果用户60秒未手动滚动，自动跳到当前行
+        idle = time.time() - self._last_scroll_interaction
+        if idle >= 60:
+            self.table.scrollToItem(self.table.item(row, 0),
+                                    QAbstractItemView.PositionAtCenter)
+        else:
+            # 用户正在浏览，延迟到60秒后再跳
+            self._pending_scroll_row = row
+            self._auto_scroll_timer.start(int((60 - idle) * 1000))
 
     @staticmethod
     def _all_detection_failed(tracks):
@@ -1085,6 +1118,8 @@ class MainWindow(QMainWindow):
                 self._task_skipped.append(self.files[row])
 
     def _on_finished(self):
+        self._auto_scroll_timer.stop()
+        self._pending_scroll_row = -1
         self.b_scan.setEnabled(bool(self.files))
         self.b_run.setEnabled(bool(self.files))
         end = datetime.datetime.now()
