@@ -38,8 +38,8 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.cfg = cfg
         self.setWindowTitle("设置")
-        # v23.39：1800×900，预留足够空间给右侧赞赏区
-        self.resize(1800, 900)
+        # v23.47：1800×970，预留足够空间给右侧赞赏区
+        self.resize(1800, 970)
         # v23.46: 去掉「?」按钮（未关联帮助文件）
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._build()
@@ -330,22 +330,32 @@ class SettingsDialog(QDialog):
 
         rl.addSpacing(8)
 
-        thanks = QLabel(
-            "如果这个工具正合你心意\n"
-            "在线要饭一下？\n\n"
-            "感谢你的 ❤️")
-        thanks.setTextFormat(Qt.RichText)  # v23.43: 强制 HTML 渲染使 ❤️ 变红
-        thanks.setFont(QFont("Microsoft YaHei", 12))
-        thanks.setWordWrap(True)
-        thanks.setAlignment(Qt.AlignCenter)
-        # 用 HTML 标红红心
-        thanks.setText(
-            "如果这个工具正合你心意<br>"
-            "在线要饭一下？<br><br>"
-            "感谢你的 <span style='color:#e53935; font-size:18px; vertical-align:middle;'>❤️</span>")
-        rl.addWidget(thanks)
+        # 文字部分
+        donate_msg = QLabel("如果这个工具正合你心意\n在线要饭一下？")
+        donate_msg.setFont(QFont("Microsoft YaHei", 12))
+        donate_msg.setStyleSheet("color:#555;")
+        donate_msg.setAlignment(Qt.AlignCenter)
+        rl.addWidget(donate_msg)
 
-        # 底部弹簧：把按钮推到底部
+        # "感谢你的 ❤️" — 嵌入式红心 PNG 保证颜色
+        thanks_row = QHBoxLayout()
+        thanks_row.setAlignment(Qt.AlignCenter)
+        thanks_label = QLabel("感谢你的")
+        thanks_label.setFont(QFont("Microsoft YaHei", 12))
+        thanks_label.setStyleSheet("color:#555;")
+        thanks_row.addWidget(thanks_label)
+        import base64
+        _HEART_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAmElEQVRYhe2UMQqAMAxFf72Cg+BNPIIX0Ru4eAgXwckbeAQP4OY1BAShMSlUC6WDHyRkyJvwhw+EECIyYwMwkBFCSFlXCABACCGEJEmSJEmSJEmSJ3meV1UFgJxz51prB4D3HkKy9x5CKKXUWpu1FkJqrRGRMUYIkSRJkiRJkiRJkiRJkiRJkiRJ+pOmaQDgnIOQ3nsAYKy11iFZCSGqVc0HFRn0J2QAAAAASUVORK5CYII="
+        heart_pix = QPixmap()
+        heart_pix.loadFromData(base64.b64decode(_HEART_B64))
+        heart_lbl = QLabel()
+        heart_lbl.setPixmap(heart_pix.scaledToHeight(24, Qt.SmoothTransformation))
+        heart_lbl.setFixedHeight(24)
+        thanks_row.addWidget(heart_lbl)
+        rl.addLayout(thanks_row)
+
+        # 底部弹簧 + 行距：把按钮推到底部并保持间距
+        rl.addSpacing(40)
         rl.addStretch()
 
         # 确定 / 取消（在右侧赞赏区底部居中）

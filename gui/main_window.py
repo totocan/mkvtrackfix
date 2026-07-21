@@ -771,10 +771,12 @@ class MainWindow(QMainWindow):
         self.b_stop_all = QPushButton("全部停止")
         self.b_open = QPushButton("打开输出目录")
         self.b_keep_failed = QPushButton("仅保留有问题的")
+        self.b_rename = QPushButton("仅智能重命名")
         self.b_scan.setEnabled(False)
         self.b_run.setEnabled(False)
         self.b_save.setEnabled(False)
         self.b_keep_failed.setEnabled(False)
+        self.b_rename.setEnabled(False)
         hc.addWidget(self.b_scan)
         hc.addWidget(self.b_run)
         hc.addWidget(self.b_save)
@@ -782,6 +784,7 @@ class MainWindow(QMainWindow):
         hc.addWidget(self.b_stop_all)
         hc.addStretch(1)
         hc.addWidget(self.b_keep_failed)
+        hc.addWidget(self.b_rename)
         hc.addWidget(self.b_open)
         v.addLayout(hc)
 
@@ -826,6 +829,8 @@ class MainWindow(QMainWindow):
                                                        self.open_output))
         self.b_keep_failed.clicked.connect(lambda: self._safe("仅保留有问题的",
                                                                self._keep_failed_only))
+        self.b_rename.clicked.connect(lambda: self._safe("仅智能重命名",
+                                                          self._do_rename_all))
 
     def _post_init_log(self):
         self.log.log('就绪。请选择源路径后点击「收集文件」。', "info")
@@ -1179,6 +1184,7 @@ class MainWindow(QMainWindow):
         self.b_scan.setEnabled(bool(self.files))
         self.b_run.setEnabled(bool(self.files))
         self.b_keep_failed.setEnabled(bool(self.files))
+        self.b_rename.setEnabled(bool(self.files))
         end = datetime.datetime.now()
         task_count = len(self.files)
         duration = ""
@@ -1366,9 +1372,81 @@ class MainWindow(QMainWindow):
         self.b_scan.setEnabled(bool(self.files))
         self.b_run.setEnabled(bool(self.files))
         self.b_keep_failed.setEnabled(bool(self.files))
+        self.b_rename.setEnabled(bool(self.files))
         self.log.log(
             f"已移除 {len(removed)} 个成功文件，保留 {len(keep)} 个需重试",
             "warn" if keep else "ok")
+
+    # v23.47: 仅智能重命名（不缓存、不扫描、不处理，只改文件名）
+    def _do_rename_all(self):
+        """遍历文件列表，走 TMDB + mkvmerge 元数据，生成规范名并重命名。"""
+        from core import namer, douban
+        import subprocess as sp
+        if not self.files:
+            return
+        total = len(self.files)
+        ok = 0
+        for i, f in enumerate(self.files[:]):
+            self.log.log(f"[重命名] ({i+1}/{total}) {os.path.basename(f)}", "info")
+            new_name = None
+            try:
+                # ① mkvmerge -J 取元数据
+                mkv = self.cfg.get("mkvmerge_path", "") or "mkvmerge"
+                res = sp.run([mkv, "-J", f], capture_output=True, text=True, timeout=30)
+                if res.returncode != 0:
+                    self.log.log(f"  ⚠ mkvmerge 解析失败，跳过", "warn")
+                    continue
+                import json as _j
+                jdata = _j.loads(res.stdout)
+                # 构造伪 Track 对象供 namer 使用
+                from core.probe import Track
+                tracks = []
+                for tr in jdata.get("tracks", []):
+                    t = Track()
+                    t.track_id = tr.get("id", 0)
+                    t.stream_index = tr.get("properties", {}).get("stream_id", t.track_id)
+                    t.track_type = tr.get("type", "")
+                    t.codec = tr.get("codec", "")
+                    t.language = tr.get("properties", {}).get("language", "")
+                    t.track_name = tr.get("properties", {}).get("track_name", "")
+                    t.channels = tr.get("properties", {}).get("audio_channels", 0)
+                    t.height = tr.get("properties", {}).get("height", 0)
+                    t.profile = tr.get("properties", {}).get("codec_id", "")
+                    t.action = "keep"
+                    t.detected_iso = t.language
+                    t.detected_name = ""
+                    t.note = ""
+                    tracks.append(t)
+                # ② TMDB 查询
+                config_for_tmdb = dict(self.cfg)
+                movie_info = douban.classify_movie(f, config_for_tmdb)
+                config_for_tmdb["_tmdb_movie_info"] = movie_info
+                # ③ namer 生成新文件名
+                new_name = namer.generate_name(f, tracks, config_for_tmdb, movie_info=movie_info)
+            except Exception as e:
+                self.log.log(f"  ⚠ 智能命名生成失败: {e}", "warn")
+                continue
+            if not new_name:
+                continue
+            # ④ 重命名
+            old_dir = os.path.dirname(os.path.abspath(f))
+            new_path = os.path.join(old_dir, new_name)
+            if new_path == f:
+                continue
+            if os.path.exists(new_path):
+                base, ext = os.path.splitext(new_name)
+                new_path = os.path.join(old_dir, f"{base}(1){ext}")
+            try:
+                os.rename(f, new_path)
+                self.files[i] = new_path
+                self.log.log(f"  ✓ {os.path.basename(f)} → {new_name}", "ok")
+                ok += 1
+            except Exception as e:
+                self.log.log(f"  ⚠ 重命名失败: {e}", "warn")
+        # 更新表格
+        self._fill_table()
+        self.b_rename.setEnabled(True)
+        self.log.log(f"重命名完成: {ok}/{total} 个文件已重命名", "ok" if ok else "info")
 
     # --------------------------- Other ---------------------------
     def open_settings(self):
@@ -1547,6 +1625,7 @@ class MainWindow(QMainWindow):
         self.b_run.setEnabled(True)
         self.b_save.setEnabled(True)
         self.b_keep_failed.setEnabled(True)
+        self.b_rename.setEnabled(True)
         n_done = len(self._completed)
         tip = f"（其中 {n_done} 个已完成，开始处理时将自动跳过）" if n_done else ""
         self.log.log(f"已导入记录: {fpath} ({len(loaded_files)} 个文件){tip}", "ok")
