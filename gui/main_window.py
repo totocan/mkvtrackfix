@@ -65,7 +65,7 @@ class CacheManager:
     - 磁盘感知：失败快照按时间排序，磁盘不足时删旧留新。
     """
     def __init__(self, files, cache_root, log_callback, skip_paths=None,
-                 keep_temp=False):
+                 keep_temp=False, prefetch_ahead=2):
         self.files = files
         self.cache_root = cache_root
         self.log_callback = log_callback
@@ -79,6 +79,8 @@ class CacheManager:
         self._skip_set = set(skip_paths or [])
         # v23.21: 保留 temp/ 子目录（OCR帧/音轨WAV）不清理
         self._keep_temp = keep_temp
+        # v23.42: 预缓存提前量（config 可配）
+        self._prefetch_ahead = max(1, min(20, prefetch_ahead))
 
     @property
     def current_idx(self):
@@ -151,12 +153,11 @@ class CacheManager:
             return
         self._cached_up_to = 0
 
-        # 2) 循环：worker 推进后，确保当前下标后 2 个都已缓存
+        # 2) 循环：worker 推进后，确保当前下标后 N 个都已缓存
         while not self._stop_event.is_set():
             with self._lock:
                 curr = self._current_idx
-            # 至少提前缓存 2 个：确保 curr+1, curr+2 就绪
-            target_min = curr + 2
+            target_min = curr + self._prefetch_ahead
             if target_min >= len(self.files):
                 break
             # 从当前已缓存的上限逐步拉到 target_min
@@ -484,7 +485,8 @@ class Worker(QThread):
         self.cache = CacheManager(self.files, tmp_root,
                                    lambda m: self._log(m, "cache"),
                                    skip_paths=self.skip_done_paths,
-                                   keep_temp=keep_temp)
+                                   keep_temp=keep_temp,
+                                   prefetch_ahead=int(self.cfg_override.get("prefetch_ahead", 2)))
         self.cache.start()
         debug_mode = bool(self.cfg_override.get("debug_mode", False))
 

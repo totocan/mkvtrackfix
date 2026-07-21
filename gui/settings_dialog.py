@@ -126,6 +126,9 @@ class SettingsDialog(QDialog):
         self.sp_ocr_attempts.setRange(1, 20)
         self.sp_ocr_attempts.setSuffix(" 次")
         self._row(f_ocr, "最多尝试次数", self.sp_ocr_attempts)
+        self.c_ocr_timeout = QComboBox()
+        self.c_ocr_timeout.addItems(["45", "60", "75", "90"])
+        self._row(f_ocr, "每段 OCR 超时(秒)", self.c_ocr_timeout)
         self.sp_ocr_min_len = QSpinBox()
         self.sp_ocr_min_len.setRange(0, 5000)
         self._row(f_ocr, "最小文本长度(低于则回退推断)", self.sp_ocr_min_len)
@@ -291,15 +294,31 @@ class SettingsDialog(QDialog):
 
         from PyQt5.QtGui import QFont
 
+        # 预缓存提前量（最顶上）
+        pf_row = QHBoxLayout()
+        pf_row.addWidget(QLabel("预缓存提前:"))
+        self.sp_prefetch = QSpinBox()
+        self.sp_prefetch.setRange(1, 20)
+        self.sp_prefetch.setValue(2)
+        self.sp_prefetch.setToolTip("后台提前缓存的任务数（1~20），越大越占硬盘但等待越少")
+        pf_row.addWidget(self.sp_prefetch)
+        pf_row.addWidget(QLabel("个任务"))
+        pf_row.addStretch()
+        rl.addLayout(pf_row)
+
+        rl.addSpacing(16)
+
         title = QLabel("🍚 在线要饭")
-        title.setFont(QFont("Microsoft YaHei", 22, QFont.Bold))
+        title.setFont(QFont("Microsoft YaHei", 18, QFont.Bold))
         title.setStyleSheet("color:#333;")
         rl.addWidget(title)
 
         subtitle = QLabel("纯属随缘，不锁任何功能")
-        subtitle.setFont(QFont("Microsoft YaHei", 13))
-        subtitle.setStyleSheet("color:#888; margin-bottom:12px;")
+        subtitle.setFont(QFont("Microsoft YaHei", 11))
+        subtitle.setStyleSheet("color:#888;")
         rl.addWidget(subtitle)
+
+        rl.addSpacing(8)
 
         # 赞赏码
         self.lbl_donate_qr = QLabel()
@@ -307,13 +326,13 @@ class SettingsDialog(QDialog):
         self.lbl_donate_qr.setStyleSheet("border:1px solid #ddd; padding:8px; background:#fff;")
         rl.addWidget(self.lbl_donate_qr, 0, Qt.AlignCenter)
 
-        rl.addSpacing(12)
+        rl.addSpacing(8)
 
         thanks = QLabel(
             "如果这个工具正合你心意\n"
             "在线要饭一下？\n\n"
-            "感谢你的 ❤️")
-        thanks.setFont(QFont("Microsoft YaHei", 14))
+            "感谢你的 <span style='color:#e53935;'>❤️</span>")
+        thanks.setFont(QFont("Microsoft YaHei", 12))
         thanks.setStyleSheet("color:#555;")
         thanks.setWordWrap(True)
         thanks.setAlignment(Qt.AlignCenter)
@@ -421,11 +440,13 @@ class SettingsDialog(QDialog):
         # RapidOCR 配置（v22）
         self.sp_ocr_skip.setValue(int(c.get("ocr_skip_seconds", _D.get("ocr_skip_seconds", 300))))
         self.sp_ocr_attempts.setValue(int(c.get("ocr_max_attempts", _D.get("ocr_max_attempts", 4))))
+        idx = self.c_ocr_timeout.findText(str(int(c.get("ocr_attempt_timeout", 60))))
+        if idx >= 0: self.c_ocr_timeout.setCurrentIndex(idx)
         self.sp_ocr_min_len.setValue(int(c.get("ocr_min_text_len", _D.get("ocr_min_text_len", 30))))
 
         # mkvextract 字幕抽取超时
         self.sp_sub_extract_timeout.setValue(
-            int(c.get("subtitle_extract_timeout", _D.get("subtitle_extract_timeout", 180))))
+            int(c.get("subtitle_extract_timeout", _D.get("subtitle_extract_timeout", 90))))
 
         # 字体设置
         font_family = c.get("gui_font_family", "") or ""
@@ -454,6 +475,9 @@ class SettingsDialog(QDialog):
         self.bx_verbose.setChecked(c.get("verbose_tools", False))
         self.bx_debug.setChecked(c.get("debug_mode", False))
         self.bx_keep_ocr.setChecked(c.get("keep_ocr_frames", False))
+
+        # v23.42: 预缓存提前量
+        self.sp_prefetch.setValue(int(c.get("prefetch_ahead", 2)))
 
         # v23.37: 加载赞赏码
         self._load_donate_qr()
@@ -488,6 +512,7 @@ class SettingsDialog(QDialog):
             # RapidOCR 配置
             c["ocr_skip_seconds"] = self.sp_ocr_skip.value()
             c["ocr_max_attempts"] = self.sp_ocr_attempts.value()
+            c["ocr_attempt_timeout"] = int(self.c_ocr_timeout.currentText())
             c["ocr_min_text_len"] = self.sp_ocr_min_len.value()
             # mkvextract 字幕抽取超时
             c["subtitle_extract_timeout"] = self.sp_sub_extract_timeout.value()
@@ -509,6 +534,8 @@ class SettingsDialog(QDialog):
             c["verbose_tools"] = self.bx_verbose.isChecked()
             c["debug_mode"] = self.bx_debug.isChecked()
             c["keep_ocr_frames"] = self.bx_keep_ocr.isChecked()
+            # v23.42: 预缓存提前量
+            c["prefetch_ahead"] = self.sp_prefetch.value()
             # v23.33: 微信推送
             c["wechat_push_enabled"] = self.bx_wechat_push.isChecked()
             c["wechat_appid"] = self.le_appid.text().strip()

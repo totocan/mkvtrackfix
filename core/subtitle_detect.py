@@ -273,7 +273,7 @@ def _ocr_with_tesseract(src_path, sub_stream_index, config, temp_dir, sub_path=N
             p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE,
                                  cwd=utils.app_root(), startupinfo=si)
-            out, err = p.communicate(timeout=45)
+            out, err = p.communicate(timeout=config.get("ocr_attempt_timeout", 60))
             if p.returncode == 0:
                 frame_paths = sorted(
                     os.path.join(frame_dir, f)

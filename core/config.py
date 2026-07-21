@@ -23,7 +23,7 @@ import shutil
 
 
 # 应用版本号：每次迭代 +1（同步修改此处和 README 即可）
-APP_VERSION = "v23.41"
+APP_VERSION = "v23.42"
 
 
 DEFAULTS = {
@@ -51,9 +51,10 @@ DEFAULTS = {
     "ocr_skip_seconds": 300,      # OCR 抽帧跳过前 N 秒（避开片头特效密集区）
     "ocr_min_text_len": 30,       # OCR 合并文本最小长度，低于此值视为失败走启发式推断
     "ocr_max_attempts": 4,        # OCR 最多尝试次数（默认 4）
+    "ocr_attempt_timeout": 60,    # OCR 每段尝试超时（秒），v23.42 新增
 
-    # —— mkvextract 字幕抽取超时（秒），13GB 大文件可能超过 45 秒 ——
-    "subtitle_extract_timeout": 180,
+    # —— mkvextract 字幕抽取超时（秒）——
+    "subtitle_extract_timeout": 90,
 
     # —— GUI 字体 ——
     "gui_font_family": "",        # 空=系统默认（Windows 通常为 Microsoft YaHei UI）
@@ -83,6 +84,7 @@ DEFAULTS = {
     # —— 调试 ——
     "debug_mode": False,
     "keep_ocr_frames": False,    # v23.21: 保留OCR帧/WAV文件供排查（不清tmp/N/temp/）
+    "prefetch_ahead": 2,         # v23.42: 预缓存提前几个任务（默认 2，最大 20）
 
     # —— 微信推送（v23.33）——
     "wechat_push_enabled": False,  # 是否启用微信推送
