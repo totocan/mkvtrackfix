@@ -1388,6 +1388,8 @@ class MainWindow(QMainWindow):
         from core import namer, douban
         import subprocess as sp
         import datetime as _dt
+        from PyQt5.QtWidgets import QApplication
+        import time
         if not self.files:
             return
         start_t = _dt.datetime.now()
@@ -1404,6 +1406,8 @@ class MainWindow(QMainWindow):
                     if 0 <= i < self.table.rowCount():
                         self.table.setItem(i, 5, QTableWidgetItem("⚠ 命名跳过"))
                         self._set_row_color(i, QColor("#7a5c00"))
+                    QApplication.processEvents()
+                    time.sleep(1)
                     continue
                 import json as _j
                 jdata = _j.loads(res.stdout)
@@ -1436,6 +1440,8 @@ class MainWindow(QMainWindow):
                 if 0 <= i < self.table.rowCount():
                     self.table.setItem(i, 5, QTableWidgetItem("⚠ 命名失败"))
                     self._set_row_color(i, QColor("#7a0000"))
+                QApplication.processEvents()
+                time.sleep(1)
                 continue
             if not new_name:
                 continue
@@ -1454,11 +1460,15 @@ class MainWindow(QMainWindow):
                     self.table.setItem(i, 5, QTableWidgetItem(f"√ {new_name}"))
                     self._set_row_color(i, QColor("#1b5e20"))
                 ok += 1
+                QApplication.processEvents()
+                time.sleep(1)
             except Exception as e:
                 self.log.log(f"  ⚠ 重命名失败: {e}", "warn")
                 if 0 <= i < self.table.rowCount():
                     self.table.setItem(i, 5, QTableWidgetItem("⚠ 重命名失败"))
                     self._set_row_color(i, QColor("#7a0000"))
+                QApplication.processEvents()
+                time.sleep(1)
         elapsed = int((_dt.datetime.now() - start_t).total_seconds())
         time_str = f"{elapsed//60}分{elapsed%60}秒" if elapsed >= 60 else f"{elapsed}秒"
         self._fill_table()
