@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <circle cx="38" cy="42" r="30" fill="#E3F2FD" fill-opacity="0.6" stroke="#0084FF" stroke-width="5"/>
-  <circle cx="38" cy="42" r="30" fill="none" stroke="#0084FF" stroke-width="5"/>
-  <line x1="60" y1="64" x2="84" y2="88" stroke="#0084FF" stroke-width="7" stroke-linecap="round"/>
-  <rect x="14" y="52" width="48" height="3" rx="1.5" fill="#0084FF"/>
-  <text x="38" y="48" text-anchor="middle" font-family="sans-serif" font-size="22" font-weight="bold" fill="#0084FF" opacity="0.5">Q</text>
-</svg>
