@@ -72,7 +72,7 @@ class SettingsDialog(QDialog):
         self.le_sample_segments.setPlaceholderText("600,1000,1500")
         self._row(f1, "音轨采样起点(逗号分隔,秒)", self.le_sample_segments)
         self.c_sample_duration = QComboBox()
-        self.c_sample_duration.addItems(["5", "10", "15", "20"])
+        self.c_sample_duration.addItems(["10", "15", "20"])
         self._row(f1, "每段采样时长(秒)", self.c_sample_duration)
         self.c_zh = QComboBox()
         self.c_zh.addItems(["cmn", "yue"])
