@@ -263,10 +263,15 @@ class SettingsDialog(QDialog):
         self.le_appsecret.setEchoMode(QLineEdit.Password)
         self.le_appsecret.setPlaceholderText("同上 AppSecret 字段")
         self.le_openid = QLineEdit()
-        self.le_openid.setPlaceholderText("用户管理 → 关注者 OpenID（你自己的）")
+        self.le_openid.setPlaceholderText("留空可点右侧自动获取")
+        self.b_fetch_openid = QPushButton("自动获取")
+        self.b_fetch_openid.clicked.connect(self._on_fetch_openid)
+        openid_row = QHBoxLayout()
+        openid_row.addWidget(self.le_openid, 1)
+        openid_row.addWidget(self.b_fetch_openid)
         f6_form.addRow("AppID:", self.le_appid)
         f6_form.addRow("AppSecret:", self.le_appsecret)
-        f6_form.addRow("OpenID:", self.le_openid)
+        f6_form.addRow("OpenID:", openid_row)
         # 凭据容器（用于启用/禁用切换）
         self.creds_widget = QWidget()
         self.creds_widget.setLayout(f6_form)
@@ -502,3 +507,41 @@ class SettingsDialog(QDialog):
             "· AppID / AppSecret：公众号后台 → 开发 → 基本配置\n"
             "· OpenID：用户管理 → 关注者列表（你自己的 OpenID）\n\n"
             "提示：需订阅号（个人可用），48h 内需与公众号有互动")
+
+    # v23.35: 自动获取 OpenID（通过微信 API 查粉丝列表）
+    def _on_fetch_openid(self):
+        import requests as req
+        from PyQt5.QtWidgets import QMessageBox
+        appid = self.le_appid.text().strip()
+        secret = self.le_appsecret.text().strip()
+        if not appid or not secret:
+            QMessageBox.warning(self, "提示", "请先填写 AppID 和 AppSecret")
+            return
+        try:
+            # 1) 拿 access_token
+            r = req.get("https://api.weixin.qq.com/cgi-bin/token",
+                        params={"grant_type": "client_credential",
+                                "appid": appid, "secret": secret},
+                        timeout=10)
+            d = r.json()
+            token = d.get("access_token")
+            if not token:
+                err = d.get("errmsg", "未知错误")
+                QMessageBox.critical(self, "获取失败", f"access_token 获取失败:\n{err}")
+                return
+            # 2) 获取用户列表（取第一个关注者即自己）
+            r2 = req.get("https://api.weixin.qq.com/cgi-bin/user/get",
+                         params={"access_token": token, "next_openid": ""},
+                         timeout=10)
+            d2 = r2.json()
+            openids = d2.get("data", {}).get("openid", [])
+            if openids:
+                self.le_openid.setText(openids[0])
+                QMessageBox.information(self, "成功",
+                    f"已自动获取你的 OpenID:\n{openids[0]}\n\n"
+                    f"如果你的 OpenID 不是第一个，请检查。")
+            else:
+                QMessageBox.warning(self, "未找到",
+                    "公众号没有关注者？请先关注自己的公众号。")
+        except Exception as e:
+            QMessageBox.critical(self, "异常", f"请求失败:\n{e}")

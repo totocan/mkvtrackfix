@@ -169,6 +169,21 @@ class CacheManager:
             # 错峰：等 worker 继续推进
             time.sleep(0.5)
 
+    def _is_valid_media(self, path):
+        """快速验证缓存文件是否为有效的 MKV/MP4（读取 magic bytes）。"""
+        try:
+            with open(path, "rb") as f:
+                head = f.read(16)
+            # MKV/WebM EBML 头: 0x1A45DFA3
+            if head[:4] == b'\x1a\x45\xdf\xa3':
+                return True
+            # MP4 ftyp box: 00..00 18 66 74 79 70
+            if b'ftyp' in head[4:12]:
+                return True
+            return False
+        except Exception:
+            return False
+
     def ensure(self, idx):
         """获取本地缓存路径。验证文件可用性，损坏时自动重缓存。
 
@@ -182,9 +197,10 @@ class CacheManager:
         with self._lock:
             ready_path = self.ready.get(idx)
         if ready_path:
-            if os.path.isfile(ready_path) and os.path.getsize(ready_path) > 0:
+            if os.path.isfile(ready_path) and os.path.getsize(ready_path) > 0 \
+                    and self._is_valid_media(ready_path):
                 return ready_path
-            # v23.30: 缓存文件损坏 → 清除标记，准备重缓存
+            # v23.35: 缓存文件损坏（文件头非 MKV/MP4）→ 清除标记并重缓存
             self._log(f"[缓存] 任务{idx + 1} 缓存文件无效，准备重缓存",
                       "warn")
             with self._lock:
