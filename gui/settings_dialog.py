@@ -40,6 +40,8 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("设置")
         # v23.39：1800×900，预留足够空间给右侧赞赏区
         self.resize(1800, 900)
+        # v23.46: 去掉「?」按钮（未关联帮助文件）
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._build()
         self._load()
 
@@ -340,7 +342,7 @@ class SettingsDialog(QDialog):
         thanks.setText(
             "如果这个工具正合你心意<br>"
             "在线要饭一下？<br><br>"
-            "感谢你的 <span style='color:#e53935; font-size:28px;'>❤️</span>")
+            "感谢你的 <span style='color:#e53935; font-size:18px; vertical-align:middle;'>❤️</span>")
         rl.addWidget(thanks)
 
         # 底部弹簧：把按钮推到底部

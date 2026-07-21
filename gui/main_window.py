@@ -704,6 +704,9 @@ class MainWindow(QMainWindow):
                                  triggered=lambda: QDesktopServices.openUrl(
                                      QUrl("https://www.zhihu.com/people/2br2"))))
 
+        # v23.46: 去掉右上角 X（防误触退出）
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowCloseButtonHint)
+
         root = QWidget()
         self.setCentralWidget(root)
         v = QVBoxLayout(root)
