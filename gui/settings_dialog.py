@@ -64,7 +64,7 @@ class SettingsDialog(QDialog):
         root = QVBoxLayout(left_content)
         root.setContentsMargins(12, 12, 12, 12)
         scroll.setWidget(left_content)
-        h_split.addWidget(scroll, 1)  # 1 = stretch factor, 占满
+        h_split.addWidget(scroll, 6)  # 左侧 60%
 
         # —— AI 模型 ——
         g1 = QGroupBox("AI 语音识别 (faster-whisper)")
@@ -285,7 +285,6 @@ class SettingsDialog(QDialog):
 
         # ---------- 右侧：赞赏区 ----------
         right_panel = QWidget()
-        right_panel.setFixedWidth(340)
         rl = QVBoxLayout(right_panel)
         rl.setContentsMargins(16, 16, 16, 16)
         rl.setAlignment(Qt.AlignTop)
@@ -300,7 +299,7 @@ class SettingsDialog(QDialog):
 
         # 赞赏码
         self.lbl_donate_qr = QLabel()
-        self.lbl_donate_qr.setFixedSize(300, 230)
+        self.lbl_donate_qr.setMinimumHeight(200)
         self.lbl_donate_qr.setStyleSheet("border:1px solid #ddd; padding:8px; background:#fff;")
         rl.addWidget(self.lbl_donate_qr, 0, Qt.AlignCenter)
 
@@ -316,7 +315,7 @@ class SettingsDialog(QDialog):
         rl.addWidget(thanks)
 
         rl.addStretch()
-        h_split.addWidget(right_panel)
+        h_split.addWidget(right_panel, 4)  # 右侧 40%
 
         # ---------- 底部：分栏 + 按钮 ----------
         outer.addLayout(h_split)
@@ -604,7 +603,7 @@ class SettingsDialog(QDialog):
             raw = base64.b64decode(_DONATE_QR_B64)
             img = QImage.fromData(raw)
             if not img.isNull():
-                pix = QPixmap.fromImage(img).scaledToWidth(290, Qt.SmoothTransformation)
+                pix = QPixmap.fromImage(img).scaledToWidth(self.lbl_donate_qr.width() - 20, Qt.SmoothTransformation)
                 self.lbl_donate_qr.setPixmap(pix)
         except Exception:
             self.lbl_donate_qr.setText("（二维码加载失败）")
