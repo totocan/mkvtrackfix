@@ -373,18 +373,30 @@ _sample_ocr_frames(frame_paths, max_frames=30):
 ```
 compute_output_path(src, config, tracks):
   if smart_rename:
-    → namer.generate_name() → 基于电影名+年份+质量的智能命名
+    → namer.generate_name() → 基于电影名+年份+分辨率+编码的智能命名
   else:
-    → 原文件名 + .fixed + .mkv
+    → 原文件名 + output_suffix + .mkv
 
 输出位置：
   → v23.18+: 写入 tmp/N/，然后 _relocate_output 搬回 NAS
-  → 搬回逻辑（_relocate_output）：
-    源文件 .mp4 / .m4v → 同目录下转 .mkv
-    源文件 .mkv 或其他 → 同目录下加 .fixed 后缀
-  → 不覆盖原文件（output_overwrite 已弃用）
-  → 不做 .bak 备份（keep_backup 已弃用）
+  → 搬回逻辑（v23.27 修复）：使用 namer 输出名的 basename，不再强制 .fixed 后缀
 ```
+
+### 6.4 智能重命名规则
+
+```
+[中文名.]英文名.年份.分辨率.视频编码.音频编码.声道.fixed.mkv
+
+示例：
+  A.Fistful.of.Dollars.1964.1080p.H.265.FLAC.2.0.fixed.mkv
+  黄金三镖客.1966.1080p.H.264.DDP.5.1.fixed.mkv
+```
+
+**说明：**
+- **不加入蓝光/杜比视界/HDR 等信息**：主流播放器（芝杜、极影视、Kodi、Jellyfin）默认就能识别媒体文件的 HDR/DV 等元数据，完全无保留必要
+- **文件名主要为刮削识别服务**：刮削依赖片名 + 年份，加入冗余的格式标记反而干扰
+- **分辨率和编码保留**：用于快速识别清晰度和兼容性（1080p/2160p + H.264/H.265/AV1）
+- **音频编码和声道保留**：用于识别音质和声道布局（FLAC/DDP/AC-3 + 2.0/5.1/7.1）
 
 ---
 

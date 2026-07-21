@@ -191,3 +191,16 @@ v23.18 引入了缓存文件名空格问题和断点续传检测缺失，已在 
 
 ### 新增文档
 - `ARCHITECTURE.md`：完整的架构与流程说明（导入→扫描→音轨检测→字幕OCR→策略→处理→缓存）
+
+---
+
+## 🐛 v23.27 — 智能重命名生效（_relocate_output bug 修复）
+
+### 问题
+扫描后点处理，输出文件名变成 `原文件名.fixed.mkv`，namer 生成的智能名称被忽略。
+
+### 原因
+`_relocate_output` 重新用 `obase + suffix` 计算 target，覆盖了 namer 的输出名。
+
+### 修复
+`_relocate_output` 改用 `out_path` 的 basename（即 namer 的输出名），不再覆盖。

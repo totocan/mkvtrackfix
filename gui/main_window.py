@@ -321,31 +321,13 @@ class Worker(QThread):
         self.log.emit(msg, level)
 
     def _relocate_output(self, orig_path, out_path):
-        """把缓存在 tmp/N/ 里的输出文件搬回原始位置（覆盖/后缀模式）。"""
+        """把缓存在 tmp/N/ 里的输出文件搬回原始位置，使用 namer 的输出名。"""
         if not out_path or not os.path.exists(out_path):
             return out_path
-        overwrite = self.cfg_override.get("output_overwrite", False)
-        keep_backup = self.cfg_override.get("keep_backup", False)
-        suffix = self.cfg_override.get("output_suffix", ".fixed")
+        # v23.27: 直接用 out_path 的 basename (namer 生成)，不再覆盖
         odir = os.path.dirname(orig_path)
-        obase = os.path.basename(orig_path)
-        onext = os.path.splitext(obase)[1].lower()
-
-        if overwrite:
-            target = orig_path
-            if keep_backup and os.path.exists(orig_path):
-                try:
-                    bak = orig_path + ".bak"
-                    if os.path.exists(bak):
-                        os.remove(bak)
-                    os.replace(orig_path, bak)
-                except OSError as e:
-                    self._log(f"[搬运] 备份原文件失败: {e}", "warn")
-        elif onext in (".mp4", ".m4v"):
-            target = os.path.join(odir, os.path.splitext(obase)[0] + ".mkv")
-        else:
-            target = os.path.join(odir, os.path.splitext(obase)[0] + suffix + ".mkv")
-
+        out_basename = os.path.basename(out_path)
+        target = os.path.join(odir, out_basename)
         if target != out_path:
             try:
                 if os.path.exists(target):
