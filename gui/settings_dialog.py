@@ -175,23 +175,6 @@ class SettingsDialog(QDialog):
         v4.addWidget(lbl_sub)
         root.addWidget(g4)
 
-        # —— GUI 字体设置 —— 【v9 新增】
-        g_font = QGroupBox("界面字体（解决文字偏小问题）")
-        f_font = QFormLayout(g_font)
-        self.cb_font_family = QFontComboBox()
-        self._row(f_font, "字体族（空=系统默认）", self.cb_font_family)
-        self.sp_gui_size = QSpinBox()
-        self.sp_gui_size.setRange(8, 24)
-        self.sp_gui_size.setSuffix(" pt")
-        self._row(f_font, "界面字号（菜单/表格/按钮）", self.sp_gui_size)
-        self.sp_log_size = QSpinBox()
-        self.sp_log_size.setRange(7, 20)
-        self.sp_log_size.setSuffix(" pt")
-        self._row(f_font, "日志区域字号（等宽字体）", self.sp_log_size)
-        btn_preview = QPushButton("预览字体效果")
-        btn_preview.clicked.connect(self._preview_font)
-        f_font.addRow(btn_preview)
-        root.addWidget(g_font)
 
         # —— 输出 ——
         g5 = QGroupBox("输出")
@@ -293,21 +276,40 @@ class SettingsDialog(QDialog):
         rl.setAlignment(Qt.AlignTop)
 
         from PyQt5.QtGui import QFont
+        from PyQt5.QtCore import Qt
 
-        # 预缓存提前量（最顶上）
+        # —— 界面字体（从左侧移来） ——
+        g_font = QGroupBox("界面字体")
+        f_font = QFormLayout(g_font)
+        f_font.setContentsMargins(8, 8, 8, 8)
+        self.cb_font_family = QFontComboBox()
+        self._row(f_font, "字体族", self.cb_font_family)
+        self.sp_gui_size = QSpinBox()
+        self.sp_gui_size.setRange(8, 24); self.sp_gui_size.setSuffix(" pt")
+        self._row(f_font, "界面字号", self.sp_gui_size)
+        self.sp_log_size = QSpinBox()
+        self.sp_log_size.setRange(7, 20); self.sp_log_size.setSuffix(" pt")
+        self._row(f_font, "日志字号", self.sp_log_size)
+        btn_preview = QPushButton("预览")
+        btn_preview.clicked.connect(self._preview_font)
+        f_font.addRow(btn_preview)
+        rl.addWidget(g_font)
+
+        rl.addSpacing(8)
+
+        # 预缓存提前量
         pf_row = QHBoxLayout()
         pf_row.addWidget(QLabel("预缓存提前:"))
-        self.sp_prefetch = QSpinBox()
-        self.sp_prefetch.setRange(1, 20)
-        self.sp_prefetch.setValue(2)
-        self.sp_prefetch.setToolTip("后台提前缓存的任务数（1~20），越大越占硬盘但等待越少")
-        pf_row.addWidget(self.sp_prefetch)
+        self.cb_prefetch = QComboBox()
+        self.cb_prefetch.addItems(["2", "3", "5", "10", "15", "20"])
+        pf_row.addWidget(self.cb_prefetch)
         pf_row.addWidget(QLabel("个任务"))
         pf_row.addStretch()
         rl.addLayout(pf_row)
 
         rl.addSpacing(16)
 
+        # —— 赞赏区 ——
         title = QLabel("🍚 在线要饭")
         title.setFont(QFont("Microsoft YaHei", 18, QFont.Bold))
         title.setStyleSheet("color:#333;")
@@ -320,7 +322,6 @@ class SettingsDialog(QDialog):
 
         rl.addSpacing(8)
 
-        # 赞赏码
         self.lbl_donate_qr = QLabel()
         self.lbl_donate_qr.setMinimumHeight(200)
         self.lbl_donate_qr.setStyleSheet("border:1px solid #ddd; padding:8px; background:#fff;")
@@ -331,11 +332,16 @@ class SettingsDialog(QDialog):
         thanks = QLabel(
             "如果这个工具正合你心意\n"
             "在线要饭一下？\n\n"
-            "感谢你的 <span style='color:#e53935;'>❤️</span>")
+            "感谢你的 ❤️")
+        thanks.setTextFormat(Qt.RichText)  # v23.43: 强制 HTML 渲染使 ❤️ 变红
         thanks.setFont(QFont("Microsoft YaHei", 12))
-        thanks.setStyleSheet("color:#555;")
         thanks.setWordWrap(True)
         thanks.setAlignment(Qt.AlignCenter)
+        # 用 HTML 标红红心
+        thanks.setText(
+            "如果这个工具正合你心意<br>"
+            "在线要饭一下？<br><br>"
+            "感谢你的 <span style='color:#e53935; font-size:16px;'>❤️</span>")
         rl.addWidget(thanks)
 
         # 底部弹簧：把按钮推到底部
@@ -477,7 +483,8 @@ class SettingsDialog(QDialog):
         self.bx_keep_ocr.setChecked(c.get("keep_ocr_frames", False))
 
         # v23.42: 预缓存提前量
-        self.sp_prefetch.setValue(int(c.get("prefetch_ahead", 2)))
+        idx = self.cb_prefetch.findText(str(int(c.get("prefetch_ahead", 2))))
+        if idx >= 0: self.cb_prefetch.setCurrentIndex(idx)
 
         # v23.37: 加载赞赏码
         self._load_donate_qr()
@@ -535,7 +542,7 @@ class SettingsDialog(QDialog):
             c["debug_mode"] = self.bx_debug.isChecked()
             c["keep_ocr_frames"] = self.bx_keep_ocr.isChecked()
             # v23.42: 预缓存提前量
-            c["prefetch_ahead"] = self.sp_prefetch.value()
+            c["prefetch_ahead"] = int(self.cb_prefetch.currentText())
             # v23.33: 微信推送
             c["wechat_push_enabled"] = self.bx_wechat_push.isChecked()
             c["wechat_appid"] = self.le_appid.text().strip()
