@@ -757,6 +757,11 @@ class MainWindow(QMainWindow):
         hc.addStretch(1)
         hc.addWidget(self.b_keep_failed)
         hc.addWidget(self.b_open)
+        v.addLayout(hc)
+
+        # v23.33: 扫描后自动开始处理
+        self.cb_auto_process = QCheckBox("扫描后自动处理（不审核直接处理）")
+        self.cb_auto_process.setChecked(False)
 
         self.bar = QProgressBar()
         self.bar.setValue(0)
@@ -953,6 +958,7 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             self.log.log("已有任务在进行。", "warn")
             return
+        self._last_mode = mode  # v23.33: 记录模式，供 _on_finished 判断自动处理
         self._task_start = datetime.datetime.now()
         self._task_src_bytes = 0  # 源文件总大小
         self._task_dst_bytes = 0  # 优化后总大小
@@ -1162,6 +1168,12 @@ class MainWindow(QMainWindow):
                 msg += "（优化后空间未减少）"
         self.log.log(msg, "ok")
 
+        # v23.33: 扫描后自动处理
+        if hasattr(self, '_last_mode') and self._last_mode == "scan" \
+                and self.cb_auto_process.isChecked() and self.files:
+            self.log.log("扫描完成，自动开始处理...", "info")
+            self.do_process()
+
         # v22: 网卡流量统计（蓝色显示做分隔线）
         net_after = _get_net_bytes()
         net_before = getattr(self, '_net_before', None)
@@ -1190,6 +1202,61 @@ class MainWindow(QMainWindow):
         _ipc_send_state("done")
         # 1.5 秒后恢复待机（让 tray 有时间展示对勾）
         QTimer.singleShot(1500, lambda: _ipc_send_state("idle"))
+
+        # v23.33: 微信推送（任务完成时通知）
+        if self.cfg.get("wechat_push_enabled", False):
+            self._push_wechat_notify(task_count, duration, src_gb, dst_gb,
+                                     saved if src_gb > 0 else 0)
+
+    # v23.33: 微信推送（客服消息，需用户先关注公众号）
+    def _push_wechat_notify(self, task_count, duration, src_gb, dst_gb, saved_gb):
+        """任务完成后调用微信客服消息接口推送通知。"""
+        import requests
+        appid = self.cfg.get("wechat_appid", "").strip()
+        secret = self.cfg.get("wechat_appsecret", "").strip()
+        openid = self.cfg.get("wechat_openid", "").strip()
+        if not (appid and secret and openid):
+            self.log.log("微信推送未配置完整 (AppID/AppSecret/OpenID)，已跳过", "warn")
+            return
+        try:
+            # 1) 拿 access_token
+            tok_resp = requests.get(
+                "https://api.weixin.qq.com/cgi-bin/token",
+                params={"grant_type": "client_credential",
+                        "appid": appid, "secret": secret},
+                timeout=10)
+            tok_data = tok_resp.json()
+            access_token = tok_data.get("access_token")
+            if not access_token:
+                err = tok_data.get("errcode", "?")
+                msg = tok_data.get("errmsg", "未知错误")
+                self.log.log(f"微信推送获取 token 失败 [{err}] {msg}", "warn")
+                return
+            # 2) 发客服消息（48h 窗口内有效）
+            text = (
+                f"🎬 mkvtrackfix 任务完成！\n"
+                f"\n"
+                f"· 任务数: {task_count} 个\n"
+                f"· 耗时:   {duration or '—'}\n"
+            )
+            if saved_gb >= 1:
+                text += f"· 节省:   {saved_gb:.2f}GB 空间 💾\n"
+            text += "\n—— 野生实验室 mkvtrackfix"
+            resp = requests.post(
+                f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={access_token}",
+                json={
+                    "touser": openid,
+                    "msgtype": "text",
+                    "text": {"content": text},
+                },
+                timeout=10)
+            data = resp.json()
+            if data.get("errcode") == 0:
+                self.log.log("微信推送已发送 ✓", "ok")
+            else:
+                self.log.log(f"微信推送失败 [{data.get('errcode')}] {data.get('errmsg')}", "warn")
+        except Exception as e:
+            self.log.log(f"微信推送异常: {e}", "warn")
 
     # --------------------------- 行删除（v23.16） ---------------------------
     def _on_table_context_menu(self, pos):

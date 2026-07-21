@@ -14,11 +14,21 @@ from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QFormLayout, QComboBox, QSpinBox, QLineEdit,
     QCheckBox, QPushButton, QGroupBox, QHBoxLayout, QDialogButtonBox,
     QFileDialog, QLabel, QFontComboBox, QScrollArea, QWidget,
+    QMessageBox,
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QPixmap, QImage
+import base64
 import os
 from core import config as config_mod
+
+
+# v23.33: 公众号二维码占位（1x1 透明 PNG）— 替换为真实二维码：
+#   1. 把二维码图片保存到 tools/qrcode.png
+#   2. 运行 python embed_qr.py 自动嵌入
+_WECHAT_QR_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+# v23.33: 激活码（用户关注公众号后从自动回复获取）
+_WECHAT_ACTIVATION_CODE = "mkfx_2024_wechat"
 
 
 class SettingsDialog(QDialog):
@@ -207,6 +217,63 @@ class SettingsDialog(QDialog):
         f5.addRow(self.bx_keep_ocr)
         root.addWidget(g5)
 
+        # —— 微信推送（v23.33）——
+        g6 = QGroupBox("微信推送（任务完成时通知）")
+        f6 = QVBoxLayout(g6)
+        self.bx_wechat_push = QCheckBox("启用微信推送（任务完成时推送到我的公众号）")
+        f6.addWidget(self.bx_wechat_push)
+
+        # 二维码 + 引导提示
+        qr_row = QHBoxLayout()
+        qr_data = base64.b64decode(_WECHAT_QR_B64)
+        qr_img = QImage.fromData(qr_data)
+        self.lbl_qr = QLabel()
+        self.lbl_qr.setPixmap(QPixmap.fromImage(qr_img).scaledToWidth(180, Qt.SmoothTransformation))
+        self.lbl_qr.setFixedSize(200, 200)
+        self.lbl_qr.setStyleSheet("border:1px solid #ccc; padding:10px; background:#fff;")
+        qr_row.addWidget(self.lbl_qr)
+        tip = QLabel(
+            "使用步骤：\n"
+            "① 扫码关注「野生实验室」公众号\n"
+            "② 发送关键字「推送配置」\n"
+            "③ 公众号自动回复：激活码 + 申请教程\n"
+            "④ 填入激活码 → 点击激活\n"
+            "⑤ 下方 AppID / AppSecret / OpenID 可编辑\n"
+            "  （需自备订阅号，普通用户关注公众号获取教程）")
+        tip.setStyleSheet("color:#555; padding-left:20px;")
+        qr_row.addWidget(tip, 1)
+        f6.addLayout(qr_row)
+
+        # 激活码 + 激活按钮
+        act_row = QHBoxLayout()
+        self.le_activation = QLineEdit()
+        self.le_activation.setPlaceholderText("输入公众号回复的激活码")
+        self.b_activate = QPushButton("激活")
+        self.b_activate.clicked.connect(self._on_activate_clicked)
+        act_row.addWidget(QLabel("激活码:"))
+        act_row.addWidget(self.le_activation, 1)
+        act_row.addWidget(self.b_activate)
+        f6.addLayout(act_row)
+
+        # 凭据输入（默认禁用，激活后启用）
+        f6_form = QFormLayout()
+        self.le_appid = QLineEdit()
+        self.le_appid.setPlaceholderText("公众号后台 → 开发 → 基本配置")
+        self.le_appsecret = QLineEdit()
+        self.le_appsecret.setEchoMode(QLineEdit.Password)
+        self.le_appsecret.setPlaceholderText("同上 AppSecret 字段")
+        self.le_openid = QLineEdit()
+        self.le_openid.setPlaceholderText("用户管理 → 关注者 OpenID（你自己的）")
+        f6_form.addRow("AppID:", self.le_appid)
+        f6_form.addRow("AppSecret:", self.le_appsecret)
+        f6_form.addRow("OpenID:", self.le_openid)
+        # 凭据容器（用于启用/禁用切换）
+        self.creds_widget = QWidget()
+        self.creds_widget.setLayout(f6_form)
+        self.creds_widget.setEnabled(False)
+        f6.addWidget(self.creds_widget)
+        root.addWidget(g6)
+
         # —— 按钮 ——
         btns = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -327,6 +394,16 @@ class SettingsDialog(QDialog):
         self.bx_debug.setChecked(c.get("debug_mode", False))
         self.bx_keep_ocr.setChecked(c.get("keep_ocr_frames", False))
 
+        # v23.33: 微信推送
+        self.bx_wechat_push.setChecked(c.get("wechat_push_enabled", False))
+        self.le_appid.setText(c.get("wechat_appid", ""))
+        self.le_appsecret.setText(c.get("wechat_appsecret", ""))
+        self.le_openid.setText(c.get("wechat_openid", ""))
+        if c.get("wechat_activated", False):
+            self.creds_widget.setEnabled(True)
+            self.b_activate.setText("已激活")
+            self.b_activate.setEnabled(False)
+
     def accept(self):
         try:
             c = self.cfg
@@ -368,6 +445,12 @@ class SettingsDialog(QDialog):
             c["verbose_tools"] = self.bx_verbose.isChecked()
             c["debug_mode"] = self.bx_debug.isChecked()
             c["keep_ocr_frames"] = self.bx_keep_ocr.isChecked()
+            # v23.33: 微信推送
+            c["wechat_push_enabled"] = self.bx_wechat_push.isChecked()
+            c["wechat_appid"] = self.le_appid.text().strip()
+            c["wechat_appsecret"] = self.le_appsecret.text().strip()
+            c["wechat_openid"] = self.le_openid.text().strip()
+            c["wechat_activated"] = self.creds_widget.isEnabled()
             # 持久化
             config_mod.save(c)
             # 应用字体到当前窗口（即时生效）
@@ -395,3 +478,27 @@ class SettingsDialog(QDialog):
             app.setFont(font)
         except Exception:
             pass
+
+    # v23.33: 激活码校验 — 关注公众号后获取激活码解锁配置
+    def _on_activate_clicked(self):
+        code = self.le_activation.text().strip()
+        if code != _WECHAT_ACTIVATION_CODE:
+            QMessageBox.warning(
+                self, "激活失败",
+                f"激活码不正确。\n\n"
+                f"请检查：\n"
+                f"① 是否已关注「野生实验室」公众号\n"
+                f"② 是否发送了关键字「推送配置」\n"
+                f"③ 输入是否与公众号回复一致")
+            return
+        self.creds_widget.setEnabled(True)
+        self.b_activate.setText("已激活 ✓")
+        self.b_activate.setEnabled(False)
+        self.le_activation.setReadOnly(True)
+        QMessageBox.information(
+            self, "激活成功",
+            "微信推送已解锁。\n\n"
+            "请填写你自己的公众号凭据：\n"
+            "· AppID / AppSecret：公众号后台 → 开发 → 基本配置\n"
+            "· OpenID：用户管理 → 关注者列表（你自己的 OpenID）\n\n"
+            "提示：需订阅号（个人可用），48h 内需与公众号有互动")
