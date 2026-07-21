@@ -170,21 +170,47 @@ class CacheManager:
             time.sleep(0.5)
 
     def ensure(self, idx):
-        """阻塞等待 idx 缓存就绪；若后台过慢/失败，前台同步拷贝兜底。"""
+        """获取本地缓存路径。验证文件可用性，损坏时自动重缓存。
+
+        流程：
+          1. 后台已就绪 → 验证文件存在且非空
+          2. 验证通过 → 返回路径
+          3. 验证失败 → 删除损坏文件，前台同步重缓存
+          4. 重缓存失败 → 返回 None（跳过任务）
+        """
+        # 1) 检查 ready 表
         with self._lock:
-            if idx in self.ready:
-                return self.ready[idx]
-        local = self.local_path(idx)
-        if not os.path.exists(local):
+            ready_path = self.ready.get(idx)
+        if ready_path:
+            if os.path.isfile(ready_path) and os.path.getsize(ready_path) > 0:
+                return ready_path
+            # v23.30: 缓存文件损坏 → 清除标记，准备重缓存
+            self._log(f"[缓存] 任务{idx + 1} 缓存文件无效，准备重缓存",
+                      "warn")
+            with self._lock:
+                self.ready.pop(idx, None)
             try:
-                os.makedirs(os.path.dirname(local), exist_ok=True)
-                shutil.copy2(self.files[idx], local)
-            except Exception as e:
-                self._log(f"[缓存] 任务{idx + 1} 同步兜底失败: {e}")
-                return None
-        with self._lock:
-            self.ready[idx] = local
-        return local
+                os.remove(ready_path)
+            except Exception:
+                pass
+
+        # 2) 前台同步缓存
+        local = self.local_path(idx)
+        try:
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+            shutil.copy2(self.files[idx], local)
+            if os.path.getsize(local) <= 0:
+                raise OSError("缓存文件为空")
+            with self._lock:
+                self.ready[idx] = local
+            return local
+        except Exception as e:
+            self._log(f"[缓存] 任务{idx + 1} 缓存失败: {e}")
+            try:
+                os.remove(local)
+            except Exception:
+                pass
+            return None
 
     def cleanup_before(self, idx):
         """完成任务 idx(0-based) 后，清理上一任务(tmp/(idx)) 的缓存目录。"""
@@ -466,20 +492,9 @@ class Worker(QThread):
                     task_tmp = os.path.join(tmp_root, str(i + 1), "temp")
                     os.makedirs(task_tmp, exist_ok=True)
                     self._log(f"分析: {f}")
-                    try:
-                        tracks, _ = pipeline.analyze_file(
-                            src, self.cfg, log=lambda m, l="info": self._log(m, l),
-                            orig_path=f, temp_dir=task_tmp)
-                    except Exception:
-                        if local and local != f:
-                            # v23.29: 缓存文件不可用 → 回退直读 NAS
-                            self._log(f"[缓存] 本地文件不可用，回退直读 NAS: {os.path.basename(f)}")
-                            src = f
-                            tracks, _ = pipeline.analyze_file(
-                                src, self.cfg, log=lambda m, l="info": self._log(m, l),
-                                orig_path=f, temp_dir=task_tmp)
-                        else:
-                            raise
+                    tracks, _ = pipeline.analyze_file(
+                        src, self.cfg, log=lambda m, l="info": self._log(m, l),
+                        orig_path=f, temp_dir=task_tmp)
                     self.results[f] = tracks
                     # v22: 所有识别失败 → 跳过
                     if _any_track_failed(tracks):
@@ -512,36 +527,14 @@ class Worker(QThread):
                             if pct - _last_pct[0] >= 10 or pct == 0:
                                 self._log(f"  转封装进度: {pct}%", "info")
                                 _last_pct[0] = pct
-                        try:
-                            ok, out, msg, _ = pipeline.process_tracks(
-                                src, cached, run_cfg,
-                                log=lambda m, l="info": self._log(m, l),
-                                progress_callback=_on_remux_progress)
-                        except Exception:
-                            if local and local != f:
-                                # v23.29: 缓存文件不可用 → 回退直读 NAS
-                                self._log(f"[缓存] 本地文件不可用，回退直读 NAS: {os.path.basename(f)}")
-                                src = f
-                                ok, out, msg, _ = pipeline.process_tracks(
-                                    src, cached, run_cfg,
-                                    log=lambda m, l="info": self._log(m, l),
-                                    progress_callback=_on_remux_progress)
-                            else:
-                                raise
+                        ok, out, msg, _ = pipeline.process_tracks(
+                            src, cached, run_cfg,
+                            log=lambda m, l="info": self._log(m, l),
+                            progress_callback=_on_remux_progress)
                     else:
-                        try:
-                            ok, out, msg, tracks = pipeline.process_file(
-                                src, run_cfg,
-                                log=lambda m, l="info": self._log(m, l))
-                        except Exception:
-                            if local and local != f:
-                                self._log(f"[缓存] 本地文件不可用，回退直读 NAS: {os.path.basename(f)}")
-                                src = f
-                                ok, out, msg, tracks = pipeline.process_file(
-                                    src, run_cfg,
-                                    log=lambda m, l="info": self._log(m, l))
-                            else:
-                                raise
+                        ok, out, msg, tracks = pipeline.process_file(
+                            src, run_cfg,
+                            log=lambda m, l="info": self._log(m, l))
                         self.results[f] = tracks
                     # v23.18: 输出在 tmp/N/ 中，搬回 NAS 原始目录
                     out_path = self._relocate_output(f, out or "")
