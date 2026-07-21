@@ -744,19 +744,19 @@ class MainWindow(QMainWindow):
         self.b_stop = QPushButton("停止当前")
         self.b_stop_all = QPushButton("全部停止")
         self.b_open = QPushButton("打开输出目录")
+        self.b_keep_failed = QPushButton("仅保留有问题的")
         self.b_scan.setEnabled(False)
         self.b_run.setEnabled(False)
         self.b_save.setEnabled(False)
+        self.b_keep_failed.setEnabled(False)
         hc.addWidget(self.b_scan)
         hc.addWidget(self.b_run)
         hc.addWidget(self.b_save)
         hc.addWidget(self.b_stop)
         hc.addWidget(self.b_stop_all)
         hc.addStretch(1)
+        hc.addWidget(self.b_keep_failed)
         hc.addWidget(self.b_open)
-        hc.addStretch(1)
-        hc.addWidget(self.b_open)
-        v.addLayout(hc)
 
         self.bar = QProgressBar()
         self.bar.setValue(0)
@@ -793,6 +793,8 @@ class MainWindow(QMainWindow):
         self.b_stop_all.clicked.connect(self.do_stop_all)
         self.b_open.clicked.connect(lambda: self._safe("打开输出目录",
                                                        self.open_output))
+        self.b_keep_failed.clicked.connect(lambda: self._safe("仅保留有问题的",
+                                                               self._keep_failed_only))
 
     def _post_init_log(self):
         self.log.log('就绪。请选择源路径后点击「收集文件」。', "info")
@@ -1130,6 +1132,7 @@ class MainWindow(QMainWindow):
         self._pending_scroll_row = -1
         self.b_scan.setEnabled(bool(self.files))
         self.b_run.setEnabled(bool(self.files))
+        self.b_keep_failed.setEnabled(bool(self.files))
         end = datetime.datetime.now()
         task_count = len(self.files)
         duration = ""
@@ -1224,6 +1227,41 @@ class MainWindow(QMainWindow):
         self.log.log(
             f"已删除 {len(removed)} 个文件："
             + ", ".join(os.path.basename(x) for x in removed), "warn")
+
+    # v23.32: 仅保留有问题的文件（失败/异常/已跳过），移除成功的
+    def _keep_failed_only(self):
+        """清掉成功/已完成的文件，只保留需要重试的。"""
+        if not self.files:
+            return
+        keep = []
+        removed = []
+        for i, f in enumerate(self.files):
+            status = ""
+            if 0 <= i < self.table.rowCount():
+                it = self.table.item(i, 5)
+                if it:
+                    status = it.text()
+            # 有问题的：失败、异常、已跳过、无状态
+            is_problem = any(k in status for k in ("失败", "异常", "跳过"))
+            is_ok = any(k in status for k in ("已分析", "完成")) and "失败" not in status
+            if is_problem or (not status or status == "待处理"):
+                keep.append(f)
+            else:
+                removed.append(f)
+                self.results.pop(f, None)
+                self._track_data.pop(f, None)
+                self._completed.pop(f, None)
+        if not removed:
+            self.log.log("没有需要移除的成功文件。", "info")
+            return
+        self.files = keep
+        self._fill_table()
+        self.b_scan.setEnabled(bool(self.files))
+        self.b_run.setEnabled(bool(self.files))
+        self.b_keep_failed.setEnabled(bool(self.files))
+        self.log.log(
+            f"已移除 {len(removed)} 个成功文件，保留 {len(keep)} 个需重试",
+            "warn" if keep else "ok")
 
     # --------------------------- Other ---------------------------
     def open_settings(self):
@@ -1361,6 +1399,7 @@ class MainWindow(QMainWindow):
         self.b_scan.setEnabled(True)
         self.b_run.setEnabled(True)
         self.b_save.setEnabled(True)
+        self.b_keep_failed.setEnabled(True)
         n_done = len(self._completed)
         tip = f"（其中 {n_done} 个已完成，开始处理时将自动跳过）" if n_done else ""
         self.log.log(f"已导入记录: {fpath} ({len(loaded_files)} 个文件){tip}", "ok")
