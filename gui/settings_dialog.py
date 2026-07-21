@@ -337,20 +337,20 @@ class SettingsDialog(QDialog):
         donate_msg.setAlignment(Qt.AlignCenter)
         rl.addWidget(donate_msg)
 
-        # "感谢你的 ❤️" — 嵌入式红心 PNG 保证颜色
+        # "感谢你的 ❤️" — 从 tools/heart.png 加载红心
         thanks_row = QHBoxLayout()
         thanks_row.setAlignment(Qt.AlignCenter)
         thanks_label = QLabel("感谢你的")
         thanks_label.setFont(QFont("Microsoft YaHei", 12))
         thanks_label.setStyleSheet("color:#555;")
         thanks_row.addWidget(thanks_label)
-        _HEART_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAmElEQVRYhe2UMQqAMAxFf72Cg+BNPIIX0Ru4eAgXwckbeAQP4OY1BAShMSlUC6WDHyRkyJvwhw+EECIyYwMwkBFCSFlXCABACCGEJEmSJEmSJEmSJ3meV1UFgJxz51prB4D3HkKy9x5CKKXUWpu1FkJqrRGRMUYIkSRJkiRJkiRJkiRJkiRJkiRJ+pOmaQDgnIOQ3nsAYKy11iFZCSGqVc0HFRn0J2QAAAAASUVORK5CYII="
-        heart_pix = QPixmap()
-        heart_pix.loadFromData(base64.b64decode(_HEART_B64))
-        heart_lbl = QLabel()
-        heart_lbl.setPixmap(heart_pix.scaledToHeight(24, Qt.SmoothTransformation))
-        heart_lbl.setFixedHeight(24)
-        thanks_row.addWidget(heart_lbl)
+        heart_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "resources", "icons", "heart.png")
+        heart_pix = QPixmap(heart_path)
+        if not heart_pix.isNull():
+            heart_lbl = QLabel()
+            heart_lbl.setPixmap(heart_pix.scaledToHeight(24, Qt.SmoothTransformation))
+            heart_lbl.setFixedHeight(24)
+            thanks_row.addWidget(heart_lbl)
         rl.addLayout(thanks_row)
 
         # 底部弹簧 + 行距：把按钮推到底部并保持间距

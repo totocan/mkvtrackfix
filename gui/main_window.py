@@ -1410,16 +1410,18 @@ class MainWindow(QMainWindow):
                 from core.probe import Track
                 tracks = []
                 for tr in jdata.get("tracks", []):
-                    t = Track()
-                    t.track_id = tr.get("id", 0)
-                    t.stream_index = tr.get("properties", {}).get("stream_id", t.track_id)
-                    t.track_type = tr.get("type", "")
-                    t.codec = tr.get("codec", "")
-                    t.language = tr.get("properties", {}).get("language", "")
-                    t.track_name = tr.get("properties", {}).get("track_name", "")
-                    t.channels = tr.get("properties", {}).get("audio_channels", 0)
-                    t.height = tr.get("properties", {}).get("height", 0)
-                    t.profile = tr.get("properties", {}).get("codec_id", "")
+                    p = tr.get("properties", {})
+                    t = Track(
+                        stream_index=p.get("stream_id", tr.get("id", 0)),
+                        track_id=tr.get("id", 0),
+                        track_type=tr.get("type", ""),
+                        codec=tr.get("codec", ""),
+                    )
+                    t.language = p.get("language", "")
+                    t.track_name = p.get("track_name", "")
+                    t.channels = p.get("audio_channels", 0)
+                    t.height = p.get("height", 0)
+                    t.profile = p.get("codec_id", "")
                     t.action = "keep"
                     t.detected_iso = t.language
                     t.detected_name = ""
