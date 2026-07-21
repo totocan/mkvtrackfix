@@ -276,7 +276,6 @@ class SettingsDialog(QDialog):
         rl.setAlignment(Qt.AlignTop)
 
         from PyQt5.QtGui import QFont
-        from PyQt5.QtCore import Qt
 
         # —— 界面字体（从左侧移来） ——
         g_font = QGroupBox("界面字体")

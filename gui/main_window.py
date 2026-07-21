@@ -697,7 +697,10 @@ class MainWindow(QMainWindow):
         m_help.addSeparator()
         m_help.addAction(QAction("打开说明(README)",
                                  self, triggered=self.open_readme))
-        m_help.addAction(QAction("作者主页", self,
+        m_help.addAction(QAction("作者 GitHub 主页", self,
+                                 triggered=lambda: QDesktopServices.openUrl(
+                                     QUrl("https://github.com/totocan"))))
+        m_help.addAction(QAction("作者知乎主页", self,
                                  triggered=lambda: QDesktopServices.openUrl(
                                      QUrl("https://www.zhihu.com/people/2br2"))))
 

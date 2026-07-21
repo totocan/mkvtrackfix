@@ -23,7 +23,7 @@ import shutil
 
 
 # 应用版本号：每次迭代 +1（同步修改此处和 README 即可）
-APP_VERSION = "v23.43"
+APP_VERSION = "v23.44"
 
 
 DEFAULTS = {
