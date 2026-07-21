@@ -882,6 +882,7 @@ class MainWindow(QMainWindow):
         self.log.log(f"已添加 {len(new)} 个文件，共 {len(self.files)} 个", "info")
         self.b_scan.setEnabled(True)
         self.b_run.setEnabled(True)
+        self.b_rename.setEnabled(True)
         self._fill_table()
         if self.le_path.text().strip():
             self.le_path.setText(files[0])
@@ -918,6 +919,7 @@ class MainWindow(QMainWindow):
         self.log.log(f"已收集 {len(files)} 个文件。", "ok")
         self.b_scan.setEnabled(bool(files))
         self.b_run.setEnabled(bool(files))
+        self.b_rename.setEnabled(bool(files))
 
     def _fill_table(self):
         self.table.setRowCount(len(self.files))
@@ -1342,6 +1344,7 @@ class MainWindow(QMainWindow):
             + ", ".join(os.path.basename(x) for x in removed), "warn")
 
     # v23.32: 仅保留有问题的文件（失败/异常/已跳过），移除成功的
+    # v23.47: 兼容「仅智能重命名」的状态标记（√=成功，⚠命名跳过=问题）
     def _keep_failed_only(self):
         """清掉成功/已完成的文件，只保留需要重试的。"""
         if not self.files:
@@ -1354,9 +1357,11 @@ class MainWindow(QMainWindow):
                 it = self.table.item(i, 5)
                 if it:
                     status = it.text()
-            # 有问题的：失败、异常、已跳过、无状态
+            # 有问题的：失败、异常、跳过、⚠ 命名跳过/失败
             is_problem = any(k in status for k in ("失败", "异常", "跳过"))
-            is_ok = any(k in status for k in ("已分析", "完成")) and "失败" not in status
+            # 成功的：已分析、完成、√（智能重命名成功）
+            is_ok = (status.startswith("√") or
+                     (any(k in status for k in ("已分析", "完成")) and "失败" not in status))
             if is_problem or (not status or status == "待处理"):
                 keep.append(f)
             else:
@@ -1382,23 +1387,26 @@ class MainWindow(QMainWindow):
         """遍历文件列表，走 TMDB + mkvmerge 元数据，生成规范名并重命名。"""
         from core import namer, douban
         import subprocess as sp
+        import datetime as _dt
         if not self.files:
             return
+        start_t = _dt.datetime.now()
         total = len(self.files)
         ok = 0
         for i, f in enumerate(self.files[:]):
             self.log.log(f"[重命名] ({i+1}/{total}) {os.path.basename(f)}", "info")
             new_name = None
             try:
-                # ① mkvmerge -J 取元数据
                 mkv = self.cfg.get("mkvmerge_path", "") or "mkvmerge"
                 res = sp.run([mkv, "-J", f], capture_output=True, text=True, timeout=30)
                 if res.returncode != 0:
                     self.log.log(f"  ⚠ mkvmerge 解析失败，跳过", "warn")
+                    if 0 <= i < self.table.rowCount():
+                        self.table.setItem(i, 5, QTableWidgetItem("⚠ 命名跳过"))
+                        self._set_row_color(i, QColor("#7a5c00"))
                     continue
                 import json as _j
                 jdata = _j.loads(res.stdout)
-                # 构造伪 Track 对象供 namer 使用
                 from core.probe import Track
                 tracks = []
                 for tr in jdata.get("tracks", []):
@@ -1417,18 +1425,18 @@ class MainWindow(QMainWindow):
                     t.detected_name = ""
                     t.note = ""
                     tracks.append(t)
-                # ② TMDB 查询
                 config_for_tmdb = dict(self.cfg)
                 movie_info = douban.classify_movie(f, config_for_tmdb)
                 config_for_tmdb["_tmdb_movie_info"] = movie_info
-                # ③ namer 生成新文件名
                 new_name = namer.generate_name(f, tracks, config_for_tmdb, movie_info=movie_info)
             except Exception as e:
                 self.log.log(f"  ⚠ 智能命名生成失败: {e}", "warn")
+                if 0 <= i < self.table.rowCount():
+                    self.table.setItem(i, 5, QTableWidgetItem("⚠ 命名失败"))
+                    self._set_row_color(i, QColor("#7a0000"))
                 continue
             if not new_name:
                 continue
-            # ④ 重命名
             old_dir = os.path.dirname(os.path.abspath(f))
             new_path = os.path.join(old_dir, new_name)
             if new_path == f:
@@ -1440,13 +1448,21 @@ class MainWindow(QMainWindow):
                 os.rename(f, new_path)
                 self.files[i] = new_path
                 self.log.log(f"  ✓ {os.path.basename(f)} → {new_name}", "ok")
+                if 0 <= i < self.table.rowCount():
+                    self.table.setItem(i, 5, QTableWidgetItem(f"√ {new_name}"))
+                    self._set_row_color(i, QColor("#1b5e20"))
                 ok += 1
             except Exception as e:
                 self.log.log(f"  ⚠ 重命名失败: {e}", "warn")
-        # 更新表格
+                if 0 <= i < self.table.rowCount():
+                    self.table.setItem(i, 5, QTableWidgetItem("⚠ 重命名失败"))
+                    self._set_row_color(i, QColor("#7a0000"))
+        elapsed = int((_dt.datetime.now() - start_t).total_seconds())
+        time_str = f"{elapsed//60}分{elapsed%60}秒" if elapsed >= 60 else f"{elapsed}秒"
         self._fill_table()
         self.b_rename.setEnabled(True)
-        self.log.log(f"重命名完成: {ok}/{total} 个文件已重命名", "ok" if ok else "info")
+        self.log.log(f"重命名完成: {ok}/{total} 个文件已重命名，耗时{time_str}",
+                     "ok" if ok else "info")
 
     # --------------------------- Other ---------------------------
     def open_settings(self):

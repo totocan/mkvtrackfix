@@ -344,7 +344,6 @@ class SettingsDialog(QDialog):
         thanks_label.setFont(QFont("Microsoft YaHei", 12))
         thanks_label.setStyleSheet("color:#555;")
         thanks_row.addWidget(thanks_label)
-        import base64
         _HEART_B64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAmElEQVRYhe2UMQqAMAxFf72Cg+BNPIIX0Ru4eAgXwckbeAQP4OY1BAShMSlUC6WDHyRkyJvwhw+EECIyYwMwkBFCSFlXCABACCGEJEmSJEmSJEmSJ3meV1UFgJxz51prB4D3HkKy9x5CKKXUWpu1FkJqrRGRMUYIkSRJkiRJkiRJkiRJkiRJkiRJ+pOmaQDgnIOQ3nsAYKy11iFZCSGqVc0HFRn0J2QAAAAASUVORK5CYII="
         heart_pix = QPixmap()
         heart_pix.loadFromData(base64.b64decode(_HEART_B64))
@@ -659,7 +658,6 @@ class SettingsDialog(QDialog):
                 "border:1px solid #ddd; padding:8px; background:#f9f9f9;"
                 " font-size:16px; color:#999;")
             return
-        import base64
         from PyQt5.QtGui import QPixmap, QImage
         try:
             raw = base64.b64decode(_DONATE_QR_B64)
