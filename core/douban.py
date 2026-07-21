@@ -267,9 +267,22 @@ def _get_movie_detail(movie_id):
 # ---------------------------------------------------------------------------
 # 国家代码 → 国产判定
 _DOMESTIC_COUNTRIES = {"CN", "HK", "TW", "MO"}
-# 国家代码 → 中文地区名（日志用）
+# 国家代码 → 中文地区名（日志用 + 文件名）
 _COUNTRY_NAMES = {
     "CN": "中国大陆", "HK": "中国香港", "TW": "中国台湾", "MO": "中国澳门",
+    "US": "美国", "GB": "英国", "FR": "法国", "DE": "德国",
+    "JP": "日本", "KR": "韩国", "IN": "印度", "IT": "意大利",
+    "ES": "西班牙", "PT": "葡萄牙", "RU": "俄罗斯", "CA": "加拿大",
+    "AU": "澳大利亚", "NZ": "新西兰", "BR": "巴西", "MX": "墨西哥",
+    "AR": "阿根廷", "SE": "瑞典", "NO": "挪威", "DK": "丹麦",
+    "FI": "芬兰", "NL": "荷兰", "BE": "比利时", "CH": "瑞士",
+    "AT": "奥地利", "PL": "波兰", "CZ": "捷克", "HU": "匈牙利",
+    "RO": "罗马尼亚", "GR": "希腊", "TR": "土耳其", "IL": "以色列",
+    "IE": "爱尔兰", "TH": "泰国", "VN": "越南", "SG": "新加坡",
+    "MY": "马来西亚", "PH": "菲律宾", "ID": "印度尼西亚", "ZA": "南非",
+    "EG": "埃及", "NG": "尼日利亚", "IR": "伊朗", "PK": "巴基斯坦",
+    "CU": "古巴", "CL": "智利", "CO": "哥伦比亚", "PE": "秘鲁",
+    "HK": "中国香港", "TW": "中国台湾",
 }
 
 # 语言文本 → ISO 码映射
@@ -354,6 +367,7 @@ def classify_movie(path, config):
         logger.log(f"TMDB详情页 中文片名: '{title_zh}'", "PIPELINE")
 
     result["country"] = country_code
+    result["country_name"] = _COUNTRY_NAMES.get(country_code, "")
     result["language"] = language_text
     result["source"] = "tmdb"
     logger.log(f"产地判断: TMDB 返回 country='{country_code}' language='{language_text}'",

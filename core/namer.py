@@ -109,14 +109,15 @@ def generate_name(src, tracks, config, movie_info=None):
     """生成规范输出文件名。
 
     movie_info: 来自 douban.classify_movie 的完整返回，
-                应包含 title_en / title_zh / year（由调用方填充）。
+                应包含 title_en / title_zh / year / country_name（由调用方填充）。
 
-    文件名规则：[中文名.]英文名.年份.分辨率.视频编码.音频编码.声道.fixed.mkv
+    文件名规则：[中文名.]英文名.年份.国家.分辨率.视频编码.音频编码.声道.fixed.mkv
     """
     # 1. 中/英文名 + 年份（优先 TMDB，后备文件名）
     en_name = (movie_info or {}).get("title_en", "") or ""
     cn_name = (movie_info or {}).get("title_zh", "") or ""
     year = (movie_info or {}).get("year", 0) or 0
+    country_name = (movie_info or {}).get("country_name", "") or ""
 
     # TMDB 查不到时从文件名解析
     if not en_name:
@@ -173,6 +174,8 @@ def generate_name(src, tracks, config, movie_info=None):
         parts.append(_sanitize(en_name))
     if year:
         parts.append(str(year))
+    if country_name:
+        parts.append(country_name)
     if res_label:
         parts.append(res_label)
     if vcodec_label:

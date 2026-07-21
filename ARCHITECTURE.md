@@ -7,6 +7,7 @@
 ## 一、文件导入
 
 ### 1.1 浏览文件夹（批量）
+
 ```
 按钮 → browse_folder()
   → QFileDialog.getExistingDirectory() 选文件夹
@@ -24,6 +25,7 @@
 **行为：** 选文件夹 → 自动扫描 → 替换整个文件列表。不支持追加。
 
 ### 1.2 浏览文件（多选追加）
+
 ```
 按钮 → browse_file()
   → QFileDialog.getOpenFileNames() 多选文件
@@ -35,6 +37,7 @@
 **行为：** 可多选 → 逐个追加（去重）→ **不替换**已有文件。
 
 ### 1.3 拖入文件（单个追加）
+
 ```
 dropEvent → add_path(p)
   → if p not in self.files: self.files.append(p)
@@ -43,6 +46,7 @@ dropEvent → add_path(p)
 **行为：** 拖入一个追加一个。去重。不替换已有文件。
 
 ### 1.4 导入记录（断点续传）
+
 ```
 按钮 → load_record()
   → 选择 .json 记录文件
@@ -96,13 +100,13 @@ dropEvent → add_path(p)
   → 返回 Track 对象列表
 ```
 
-**已知限制：** 仅支持 MKV 格式（mkvmerge 只能处理 MKV）。
-MP4 文件没有内置轨道容器信息，无法直接解析。
+**已知限制：** 仅支持 MKV 格式（mkvmerge 只能处理 MKV）。  
+MP4 文件没有内置轨道容器信息，无法直接解析。  
 如果传入 mp4，会尝试用 ffmpeg 探测，但可能降级。
 
 ### 2.3 产地判断（classify_movie）
 
-> 代码文件为 `core/douban.py`，但已替换为 TMDB（v21.2 起）。
+> 代码文件为 `core/douban.py`，但已替换为 TMDB（v21.2 起）。  
 > 文件名是历史遗留，功能已是 TMDB 纯网页抓取，不需要 API Key。
 
 ```
@@ -128,7 +132,7 @@ MP4 文件没有内置轨道容器信息，无法直接解析。
 
 ## 三、音轨检测（Audio Detection）
 
-### 3.1 提前返回判断（_audio_early_check）
+### 3.1 提前返回判断（\_audio_early_check）
 
 ```
 配置项: audio_redetect = "all" / "und_only" / "skip"
@@ -145,7 +149,7 @@ all 模式（默认）:
   → 全部继续检测（detected_iso 设为空）
 ```
 
-### 3.2 音轨采样（_extract_audio_segments）
+### 3.2 音轨采样（\_extract_audio_segments）
 
 ```
 配置项:
@@ -162,7 +166,7 @@ all 模式（默认）:
 每段 10 秒 WAV（可在设置中选择 5/10/15/20 秒）。
 ```
 
-### 3.3 音轨 AI 检测（_detect_audio）
+### 3.3 音轨 AI 检测（\_detect_audio）
 
 ```
 流程:
@@ -179,13 +183,14 @@ all 模式（默认）:
 ```
 
 **采样配置（config.json）：**
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `sample_segments` | `"600,1000,1500"` | 采样起点（秒），可自定义如 `"300,600,900,1200"` |
-| `sample_duration_seconds` | `10` | 每段采样时长 |
-| `model_size` | `"medium"` | Whisper 模型：tiny/base/small/medium/large-v3 |
-| `audio_redetect` | `"all"` | all / und_only / skip |
-| `zh_audio_as` | `"cmn"` | zh 映射：cmn / yue |
+
+| 参数                        | 默认值               | 说明                                         |
+| ------------------------- | ----------------- | ------------------------------------------ |
+| `sample_segments`         | `"600,1000,1500"` | 采样起点（秒），可自定义如 `"300,600,900,1200"`         |
+| `sample_duration_seconds` | `10`              | 每段采样时长                                     |
+| `model_size`              | `"medium"`        | Whisper 模型：tiny/base/small/medium/large-v3 |
+| `audio_redetect`          | `"all"`           | all / und_only / skip                      |
+| `zh_audio_as`             | `"cmn"`           | zh 映射：cmn / yue                            |
 
 ---
 
@@ -267,13 +272,13 @@ _sample_ocr_frames(frame_paths, max_frames=30):
 
 ### 4.4 字幕配置参数
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `ocr_skip_seconds` | `300` | 跳过前 N 秒（避开片头） |
-| `ocr_max_attempts` | `4` | 最多尝试次数 |
-| `ocr_min_text_len` | `30` | OCR 有效文本最小长度 |
-| `subtitle_extract_timeout` | `180` | 字幕抽取超时（秒） |
-| `keep_ocr_frames` | `false` | 保留 OCR 帧/WAV（独立于调试模式） |
+| 参数                         | 默认值     | 说明                    |
+| -------------------------- | ------- | --------------------- |
+| `ocr_skip_seconds`         | `300`   | 跳过前 N 秒（避开片头）         |
+| `ocr_max_attempts`         | `4`     | 最多尝试次数                |
+| `ocr_min_text_len`         | `30`    | OCR 有效文本最小长度          |
+| `subtitle_extract_timeout` | `180`   | 字幕抽取超时（秒）             |
+| `keep_ocr_frames`          | `false` | 保留 OCR 帧/WAV（独立于调试模式） |
 
 ---
 
@@ -302,15 +307,15 @@ _sample_ocr_frames(frame_paths, max_frames=30):
 
 **编码质量权重：**
 
-| 编码 | 权重 |
-|------|------|
-| TrueHD Atmos | 10 |
-| TrueHD | 9 |
-| FLAC | 8 |
-| DTS-HD MA | 7 |
-| AC-3 / E-AC-3 | 5 |
-| AAC | 3 |
-| 其他 | 2 |
+| 编码            | 权重 |
+| ------------- | -- |
+| TrueHD Atmos  | 10 |
+| TrueHD        | 9  |
+| FLAC          | 8  |
+| DTS-HD MA     | 7  |
+| AC-3 / E-AC-3 | 5  |
+| AAC           | 3  |
+| 其他            | 2  |
 
 ### 5.2 字幕策略（apply_subtitle_policy）
 
@@ -385,16 +390,22 @@ compute_output_path(src, config, tracks):
 ### 6.4 智能重命名规则
 
 ```
-[中文名.]英文名.年份.分辨率.视频编码.音频编码.声道.fixed.mkv
+[中文名.]英文名.年份.国家.分辨率.视频编码.音频编码.声道.fixed.mkv
 
 示例：
-  A.Fistful.of.Dollars.1964.1080p.H.265.FLAC.2.0.fixed.mkv
-  黄金三镖客.1966.1080p.H.264.DDP.5.1.fixed.mkv
+  A.Fistful.of.Dollars.1964.意大利.1080p.H.265.FLAC.2.0.fixed.mkv
+  黄金三镖客.1966.意大利.1080p.H.264.DDP.5.1.fixed.mkv
+  七武士.1954.日本.1080p.H.264.FLAC.1.0.fixed.mkv
 ```
 
 **说明：**
 - **不加入蓝光/杜比视界/HDR 等信息**：主流播放器（芝杜、极影视、Kodi、Jellyfin）默认就能识别媒体文件的 HDR/DV 等元数据，完全无保留必要
 - **文件名主要为刮削识别服务**：刮削依赖片名 + 年份，加入冗余的格式标记反而干扰
+- **国家**：从 TMDB 查询的中文国家名（如"美国""日本""意大利"），用于区分同名电影（不同国家可能同名），TMDB 查不到时不加入
+- **中文名策略**：
+  - 父目录已含中文名 → 文件名不重复加中文名（减少长度）
+  - 父目录无中文名 → 文件名加入 TMDB 中文名，排列为 `中文名.英文名.年份…`
+  - 用户（如极影视）查看文件列表时，路径或文件名总有一处显示中文，方便手动刮削
 - **分辨率和编码保留**：用于快速识别清晰度和兼容性（1080p/2160p + H.264/H.265/AV1）
 - **音频编码和声道保留**：用于识别音质和声道布局（FLAC/DDP/AC-3 + 2.0/5.1/7.1）
 
@@ -458,48 +469,48 @@ tmp/
 
 ## 八、配置参数总表
 
-| 参数 | 默认值 | 作用域 | 说明 |
-|------|--------|--------|------|
-| `model_size` | `medium` | AI | Whisper 模型大小 |
-| `device` | `cpu` | AI | cpu / cuda |
-| `compute_type` | `int8` | AI | int8/int16/float16/float32 |
-| `sample_segments` | `"600,1000,1500"` | 音轨 | 采样起点（秒） |
-| `sample_duration_seconds` | `10` | 音轨 | 每段时长 |
-| `ocr_skip_seconds` | `300` | 字幕 | 跳过前 N 秒 |
-| `ocr_max_attempts` | `4` | 字幕 | 最大尝试次数 |
-| `ocr_min_text_len` | `30` | 字幕 | 有效文本最小长度 |
-| `audio_redetect` | `all` | 音轨 | all/und_only/skip |
-| `zh_audio_as` | `cmn` | 音轨 | cmn/yue |
-| `subtitle_extract_timeout` | `180` | 字幕 | 提取超时 |
-| `sub_remove_traditional` | `true` | 策略 | 移除繁中 |
-| `sub_remove_pure_english_if_bilingual` | `true` | 策略 | 有双语时去英文 |
-| `sub_remove_redundant_simplified_if_bilingual` | `true` | 策略 | 有双语时去冗余简中 |
-| `audio_reduce` | `true` | 策略 | 同语言多轨精简 |
-| `audio_keep_best_only` | `true` | 策略 | 保留最佳音轨 |
-| `smart_rename` | `true` | 输出 | 智能重命名 |
-| `output_suffix` | `".fixed"` | 输出 | 非智能重命名后缀 |
-| `douban_enabled` | `true` | 产地 | 豆瓣查询 |
-| `domestic_drop_english` | `true` | 策略 | 国产去英音轨 |
-| `verbose_tools` | `true` | 日志 | 第三方工具日志 |
-| `debug_mode` | `false` | 调试 | 保留临时文件 |
-| `keep_ocr_frames` | `false` | 调试 | 保留 OCR 帧/WAV |
-| `recursive` | `true` | 导入 | 递归扫描目录 |
-| `extensions` | `["mp4","mkv"]` | 导入 | 文件扩展名过滤 |
+| 参数                                             | 默认值               | 作用域 | 说明                         |
+| ---------------------------------------------- | ----------------- | --- | -------------------------- |
+| `model_size`                                   | `medium`          | AI  | Whisper 模型大小               |
+| `device`                                       | `cpu`             | AI  | cpu / cuda                 |
+| `compute_type`                                 | `int8`            | AI  | int8/int16/float16/float32 |
+| `sample_segments`                              | `"600,1000,1500"` | 音轨  | 采样起点（秒）                    |
+| `sample_duration_seconds`                      | `10`              | 音轨  | 每段时长                       |
+| `ocr_skip_seconds`                             | `300`             | 字幕  | 跳过前 N 秒                    |
+| `ocr_max_attempts`                             | `4`               | 字幕  | 最大尝试次数                     |
+| `ocr_min_text_len`                             | `30`              | 字幕  | 有效文本最小长度                   |
+| `audio_redetect`                               | `all`             | 音轨  | all/und_only/skip          |
+| `zh_audio_as`                                  | `cmn`             | 音轨  | cmn/yue                    |
+| `subtitle_extract_timeout`                     | `180`             | 字幕  | 提取超时                       |
+| `sub_remove_traditional`                       | `true`            | 策略  | 移除繁中                       |
+| `sub_remove_pure_english_if_bilingual`         | `true`            | 策略  | 有双语时去英文                    |
+| `sub_remove_redundant_simplified_if_bilingual` | `true`            | 策略  | 有双语时去冗余简中                  |
+| `audio_reduce`                                 | `true`            | 策略  | 同语言多轨精简                    |
+| `audio_keep_best_only`                         | `true`            | 策略  | 保留最佳音轨                     |
+| `smart_rename`                                 | `true`            | 输出  | 智能重命名                      |
+| `output_suffix`                                | `".fixed"`        | 输出  | 非智能重命名后缀                   |
+| `douban_enabled`                               | `true`            | 产地  | 豆瓣查询                       |
+| `domestic_drop_english`                        | `true`            | 策略  | 国产去英音轨                     |
+| `verbose_tools`                                | `true`            | 日志  | 第三方工具日志                    |
+| `debug_mode`                                   | `false`           | 调试  | 保留临时文件                     |
+| `keep_ocr_frames`                              | `false`           | 调试  | 保留 OCR 帧/WAV               |
+| `recursive`                                    | `true`            | 导入  | 递归扫描目录                     |
+| `extensions`                                   | `["mp4","mkv"]`   | 导入  | 文件扩展名过滤                    |
 
 ---
 
 ## 九、版本演进速览
 
-| 版本 | 核心变更 |
-|------|---------|
-| v23.15 | 调试模式磁盘修复（滑动窗口清理） |
-| v23.16 | 记录编辑器（删除行 + 断点续传） |
-| v23.17 | 扫描模式断点续传 |
+| 版本     | 核心变更                               |
+| ------ | ---------------------------------- |
+| v23.15 | 调试模式磁盘修复（滑动窗口清理）                   |
+| v23.16 | 记录编辑器（删除行 + 断点续传）                  |
+| v23.17 | 扫描模式断点续传                           |
 | v23.18 | **恢复整片缓存 tmp/N/**（CacheManager 复活） |
-| v23.19 | 修复缓存文件名空格 + 断点续传检测 |
-| v23.20 | 兼容老记录 + 启动清理旧缓存 |
-| v23.21 | 背景缓存跳过已完成的文件 |
-| v23.22 | OCR 采样改 300 秒间隔 |
-| v23.23 | keep_ocr_frames 加入设置界面 |
-| v23.24 | 更新 CHANGES.md + 修复 purge 顺序 |
-| v23.25 | 区分扫描完成与处理完成（断点续传修复） |
+| v23.19 | 修复缓存文件名空格 + 断点续传检测                 |
+| v23.20 | 兼容老记录 + 启动清理旧缓存                    |
+| v23.21 | 背景缓存跳过已完成的文件                       |
+| v23.22 | OCR 采样改 300 秒间隔                    |
+| v23.23 | keep_ocr_frames 加入设置界面             |
+| v23.24 | 更新 CHANGES.md + 修复 purge 顺序        |
+| v23.25 | 区分扫描完成与处理完成（断点续传修复）                |
