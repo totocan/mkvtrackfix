@@ -946,7 +946,14 @@ class MainWindow(QMainWindow):
         self.log.log(f"任务开始: {self._task_start.strftime('%H:%M:%S')}", "info")
         cfg_override = getattr(self, 'worker_cfg_override', None)
         # v23.17: 扫描/处理模式均支持断点续传 —— 导入记录后自动跳过已完成
-        skip = set(self._completed.keys()) if mode in ("process", "scan") else None
+        # v23.24: 区分扫描完成(已分析)和处理完成(完成)，避免扫描后点处理全部跳过
+        if mode == "process":
+            skip = {f for f, (s, _) in self._completed.items()
+                     if s and ("完成" in s) and ("已分析" not in s)}
+        elif mode == "scan":
+            skip = set(self._completed.keys())
+        else:
+            skip = None
         self.worker = Worker(self.files, self.results, self.cfg, mode,
                              cfg_override=cfg_override, skip_done_paths=skip)
         self.worker.log.connect(self.log.log)
