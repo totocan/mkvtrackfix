@@ -42,7 +42,7 @@
 
 <br>
 
-[📥 下载便携版](../../releases) · [📝 更新日志](CHANGES.md) · [🐛 反馈问题](../../issues) · [📖 补充手册](READMEPLUS.md) · [⭐ Star](../../stargazers)
+[📥 下载便携版](../../releases) · [📝 更新日志](CHANGES.md) · [🐛 反馈问题](../../issues) · [📖 补充手册](READMEPLUS.md) · [📖 架构手册](ARCHITECTURE.md) · [⭐ Star](../../stargazers)
 
 </div>
 
