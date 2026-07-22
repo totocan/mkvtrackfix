@@ -539,8 +539,15 @@ class Worker(QThread):
                     self._log(f"处理: {f}")
                     run_cfg = dict(self.cfg_override)
                     run_cfg["output_overwrite"] = False
-                    if f in self.results:
-                        cached = self.results[f]
+                    # v23.50: 路径归一化后 lookup（解决 UNC 路径分隔符不一致问题）
+                    f_norm = os.path.normpath(f).lower()
+                    cached_found = None
+                    for k, v in self.results.items():
+                        if os.path.normpath(k).lower() == f_norm:
+                            cached_found = v
+                            break
+                    if cached_found is not None:
+                        cached = cached_found
                         if all(getattr(t, "action", "keep") == "skip"
                                for t in cached if t.track_type in ("audio", "subtitle")):
                             self.file_done.emit(i, "轨道识别失败，已跳过", "已跳过", "warn", "")
@@ -558,7 +565,7 @@ class Worker(QThread):
                         ok, out, msg, tracks = pipeline.process_file(
                             src, run_cfg,
                             log=lambda m, l="info": self._log(m, l))
-                        self.results[f] = tracks
+                        self.results[os.path.normpath(f).lower()] = tracks
                     # v23.18: 输出在 tmp/N/ 中，搬回 NAS 原始目录
                     out_path = self._relocate_output(f, out or "")
                     plan = fmt_plan(self.results[f])
