@@ -291,9 +291,13 @@ class TrayApp:
         QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(lp)))
 
     def open_tmdb_manager(self):
-        """在资源管理器中打开 tmdb_manager.py 所在目录，方便用户双击启动。"""
-        manager_dir = self.app_root
-        QDesktopServices.openUrl(QUrl.fromLocalFile(manager_dir))
+        """启动 TMDB 缓存管理器独立 GUI。"""
+        python_exe = _python_exe(self.app_root)
+        tmdb_path = os.path.join(self.app_root, "tmdb_manager.py")
+        if os.path.exists(tmdb_path):
+            subprocess.Popen([python_exe, tmdb_path], cwd=self.app_root)
+        else:
+            QMessageBox.warning(None, "提示", "找不到 tmdb_manager.py，请重新安装 v23.49+")
 
     def quit_self(self):
         if self.proc is not None and self.proc.poll() is None:
