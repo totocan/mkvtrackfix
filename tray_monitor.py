@@ -229,6 +229,8 @@ class TrayApp:
         self.a_stop.triggered.connect(self.stop_program)
         self.a_log = QAction("查看最新日志", self.menu)
         self.a_log.triggered.connect(self.open_log)
+        self.a_tmdb = QAction("TMDB 缓存管理器", self.menu)
+        self.a_tmdb.triggered.connect(self.open_tmdb_manager)
         self.a_quit = QAction("退出本身", self.menu)
         self.a_quit.triggered.connect(self.quit_self)
 
@@ -236,6 +238,7 @@ class TrayApp:
         self.menu.addAction(self.a_stop)
         self.menu.addSeparator()
         self.menu.addAction(self.a_log)
+        self.menu.addAction(self.a_tmdb)
         self.menu.addSeparator()
         self.menu.addAction(self.a_quit)
 
@@ -286,6 +289,11 @@ class TrayApp:
             QMessageBox.information(None, "提示", "暂无日志文件。")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(lp)))
+
+    def open_tmdb_manager(self):
+        """在资源管理器中打开 tmdb_manager.py 所在目录，方便用户双击启动。"""
+        manager_dir = self.app_root
+        QDesktopServices.openUrl(QUrl.fromLocalFile(manager_dir))
 
     def quit_self(self):
         if self.proc is not None and self.proc.poll() is None:
