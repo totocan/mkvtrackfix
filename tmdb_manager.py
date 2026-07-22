@@ -322,16 +322,26 @@ class TmdbManager(QMainWindow):
 
 
 def main():
-    app = QApplication(sys.argv)
-    # v23.52: Qt 中文翻译（和主程序保持一致）
-    from PyQt5.QtCore import QTranslator, QLocale, QLibraryInfo
-    _tr = QTranslator()
-    if _tr.load(QLocale.system(), 'qt', '_', QLibraryInfo.location(QLibraryInfo.TranslationsPath)):
-        app.installTranslator(_tr)
-    w = TmdbManager()
-    w.show()
-    w.showMaximized()
-    sys.exit(app.exec_())
+    # v23.53: 全局异常捕获，崩溃时写日志方便排查
+    try:
+        app = QApplication(sys.argv)
+        # v23.52: Qt 中文翻译（和主程序保持一致）
+        from PyQt5.QtCore import QTranslator, QLocale, QLibraryInfo
+        _tr = QTranslator()
+        lp = QLibraryInfo.location(QLibraryInfo.TranslationsPath)
+        if _tr.load(QLocale.system(), 'qt', '_', lp):
+            app.installTranslator(_tr)
+        w = TmdbManager()
+        w.show()
+        w.showMaximized()
+        sys.exit(app.exec_())
+    except Exception as _e:
+        import traceback
+        err_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "tmdb_crash.log")
+        os.makedirs(os.path.dirname(err_log), exist_ok=True)
+        with open(err_log, "w", encoding="utf-8") as _f:
+            traceback.print_exc(file=_f)
+        raise  # 让调用者也能看到
 
 
 if __name__ == "__main__":
