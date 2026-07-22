@@ -257,6 +257,13 @@ def mkvmerge_identify(path):
     from . import config as cfg_mod
     cfg = cfg_mod.load()
     exe = cfg_mod.resolve_mkvmerge(cfg) or "mkvmerge"
+    # v23.54: 调 mkvmerge 前先自己确认文件可读
+    try:
+        with open(path, "rb") as _f_check:
+            _f_check.read(16)
+    except Exception as _e:
+        raise CmdError([exe, "-J", path], -3,
+                       f"文件不可读: {_e}")
     rc, out, err = run([exe, "-J", path], timeout=120,
                        log_stage="TOOLS", label="mkvmerge-识别")
     if rc != 0:
