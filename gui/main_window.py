@@ -198,12 +198,15 @@ class CacheManager:
         with self._lock:
             ready_path = self.ready.get(idx)
         if ready_path:
-            if os.path.isfile(ready_path) and os.path.getsize(ready_path) > 0 \
-                    and self._is_valid_media(ready_path):
-                return ready_path
+            # v23.48: 重试 3 次（每次 2 秒），解决后台写锁导致的临时无法读取
+            for retry in range(3):
+                if os.path.isfile(ready_path) and os.path.getsize(ready_path) > 0 \
+                        and self._is_valid_media(ready_path):
+                    return ready_path
+                if retry < 2:
+                    time.sleep(2)
             # v23.35: 缓存文件损坏（文件头非 MKV/MP4）→ 清除标记并重缓存
-            self._log(f"[缓存] 任务{idx + 1} 缓存文件无效，准备重缓存",
-                      "warn")
+            self._log(f"[缓存] 任务{idx + 1} 缓存文件无效，准备重缓存")
             with self._lock:
                 self.ready.pop(idx, None)
             try:

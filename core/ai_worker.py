@@ -53,19 +53,57 @@ class AIDetector:
         self._lock = threading.Lock()
 
     def _ensure_local_copy(self, path):
-        """如果文件在网络路径上，将其复制到本地临时目录。"""
-        # 判断 UNC 路径 (// 开头) 或映射的网络驱动器
-        if path.startswith(("\\\\", "//")) or (len(path) > 2 and path[1] == ':' and not os.path.exists(path[:2])):
-            _plog(f"检测到网络/UNC路径，正在进行本地缓存预载: {path}", "AI_DISK")
-            temp_path = os.path.join(tempfile.gettempdir(), f"ai_cache_{uuid.uuid4().hex}_{os.path.basename(path)}")
-            try:
+        """如果文件在网络路径上，将其复制到本地临时目录。
+
+        v23.15 加固：
+          - 用源路径 hash 生成稳定文件名，避免同一文件反复复制产生多份副本；
+          - 复制前调用 _purge_stale_cache 清理历史残留（最多保留 2 份），
+            杜绝调试模式下整部电影副本无限堆积打满 C 盘。
+        """
+        is_remote = (path.startswith(("\\\\", "//"))
+                     or (len(path) > 2 and path[1] == ':' and not os.path.exists(path[:2])))
+        if not is_remote:
+            return path, False
+        _plog(f"检测到网络/UNC路径，正在进行本地缓存预载: {path}", "AI_DISK")
+        self._purge_stale_cache()
+        try:
+            key = uuid.uuid5(uuid.NAMESPACE_URL, path).hex[:16]
+            temp_path = os.path.join(tempfile.gettempdir(),
+                                     f"ai_cache_{key}_{os.path.basename(path)}")
+            # 已存在同文件则直接复用，不重复复制
+            if not (os.path.exists(temp_path)
+                    and abs(os.path.getsize(temp_path) - os.path.getsize(path)) < 1024 * 1024):
+                if os.path.exists(temp_path):
+                    try: os.remove(temp_path)
+                    except Exception: pass
                 shutil.copy2(path, temp_path)
-                _plog(f"本地缓存就绪: {temp_path}", "AI_DISK")
-                return temp_path, True # 返回路径和是否需要后续清理
-            except Exception as e:
-                _plog(f"本地缓存预载失败: {e}", "AI_DISK")
-                return path, False
-        return path, False
+            _plog(f"本地缓存就绪: {temp_path}", "AI_DISK")
+            return temp_path, True  # 返回路径和是否需要后续清理
+        except Exception as e:
+            _plog(f"本地缓存预载失败: {e}", "AI_DISK")
+            return path, False
+
+    def _purge_stale_cache(self, max_keep=2):
+        """清理本进程产生的 ai_cache_* 副本，最多保留 max_keep 份，防止磁盘堆积。"""
+        try:
+            tmp = tempfile.gettempdir()
+            matches = []
+            for fn in os.listdir(tmp):
+                if fn.startswith("ai_cache_") and not fn.endswith(".part"):
+                    fp = os.path.join(tmp, fn)
+                    try:
+                        matches.append((os.path.getmtime(fp), fp))
+                    except Exception:
+                        pass
+            matches.sort(reverse=True)  # 最新的在前
+            for _, fp in matches[max_keep:]:
+                try:
+                    if os.path.isfile(fp):
+                        os.remove(fp)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _is_in_cooldown(self):
         """判断是否处于完全冷却期（连续崩溃超过上限后短暂冻结）。"""
@@ -183,17 +221,38 @@ class AIDetector:
             if obj is None or obj is _END:
                 self._clear()
                 self._mark_failed()
+                # v23.48: 崩溃时输出系统快照辅助排查
+                try:
+                    import psutil
+                    mem = psutil.virtual_memory()
+                    proc = psutil.Process()
+                    children = proc.children(recursive=True)
+                    extra = ""
+                    if hasattr(psutil, "windows"):
+                        extra = f", 句柄:{proc.num_handles()}"
+                    logger.log(
+                        f"[AI] 子进程崩溃快照: "
+                        f"内存 {mem.percent}%({mem.used//1024**3}GB/{mem.total//1024**3}GB)"
+                        f", 子进程:{len(children)}"
+                        f"{extra}"
+                        f", 连续失败:{self._fail_count}",
+                        "AI")
+                except Exception:
+                    pass
                 raise AISubprocessUnavailable("子进程崩溃")
             
             if obj.get("t") == "ok": return obj.get("out")
             if obj.get("t") == "err": raise RuntimeError(obj.get("e"))
             
         finally:
-            # 【清理】：调试模式保留供排查
-            if needs_cleanup and os.path.exists(working_path) \
-                    and not cfg.get("debug_mode", False):
-                try: os.remove(working_path)
-                except: pass
+            # 【清理】：非调试模式立即删除副本；调试模式保留最近少量失败副本，
+            # 通过窗口清理避免整部电影副本无限堆积（v23.15 修复 C 盘打满）。
+            if needs_cleanup and os.path.exists(working_path):
+                if not cfg.get("debug_mode", False):
+                    try: os.remove(working_path)
+                    except Exception: pass
+                else:
+                    self._purge_stale_cache(max_keep=2)
 
     def shutdown(self):
         self._clear()
