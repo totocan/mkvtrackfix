@@ -22,6 +22,45 @@ CACHE_DB = os.path.join(CACHE_DIR, "tmdb_cache.db")
 _SCHEMA_VERSION = 1
 
 
+# ── ISO 3166-1 alpha-2 -> 中文国名 静态映射（v23.54 强化） ──
+# 覆盖 TMDB production_countries 常见代码，用于零成本补 country_name，
+# 不依赖联网爬取。缺失代码回退为空字符串（保持原值）。
+COUNTRY_MAP = {
+    "US": "美国", "GB": "英国", "FR": "法国", "DE": "德国", "IT": "意大利",
+    "ES": "西班牙", "JP": "日本", "KR": "韩国", "CN": "中国", "HK": "中国香港",
+    "TW": "中国台湾", "RU": "俄罗斯", "CA": "加拿大", "AU": "澳大利亚", "NZ": "新西兰",
+    "IN": "印度", "BR": "巴西", "MX": "墨西哥", "AR": "阿根廷", "CH": "瑞士",
+    "SE": "瑞典", "NO": "挪威", "DK": "丹麦", "FI": "芬兰", "NL": "荷兰",
+    "BE": "比利时", "AT": "奥地利", "PL": "波兰", "CZ": "捷克", "HU": "匈牙利",
+    "PT": "葡萄牙", "IE": "爱尔兰", "GR": "希腊", "TR": "土耳其", "TH": "泰国",
+    "SG": "新加坡", "MY": "马来西亚", "ID": "印度尼西亚", "PH": "菲律宾", "VN": "越南",
+    "ZA": "南非", "EG": "埃及", "IL": "以色列", "SA": "沙特阿拉伯", "AE": "阿联酋",
+    "UA": "乌克兰", "RO": "罗马尼亚", "BG": "保加利亚", "HR": "克罗地亚", "RS": "塞尔维亚",
+    "SK": "斯洛伐克", "SI": "斯洛文尼亚", "LT": "立陶宛", "LV": "拉脱维亚", "EE": "爱沙尼亚",
+    "IS": "冰岛", "LU": "卢森堡", "MC": "摩纳哥", "AD": "安道尔", "MT": "马耳他",
+    "CY": "塞浦路斯", "QA": "卡塔尔", "KW": "科威特", "LB": "黎巴嫩", "JO": "约旦",
+    "MA": "摩洛哥", "TN": "突尼斯", "KE": "肯尼亚", "NG": "尼日利亚", "GH": "加纳",
+    "CO": "哥伦比亚", "CL": "智利", "PE": "秘鲁", "VE": "委内瑞拉", "EC": "厄瓜多尔",
+    "UY": "乌拉圭", "BO": "玻利维亚", "PY": "巴拉圭", "CR": "哥斯达黎加", "PA": "巴拿马",
+    "CU": "古巴", "DO": "多米尼加", "GT": "危地马拉", "PK": "巴基斯坦", "BD": "孟加拉国",
+    "LK": "斯里兰卡", "NP": "尼泊尔", "KH": "柬埔寨", "MM": "缅甸", "MN": "蒙古",
+    "KZ": "哈萨克斯坦", "GE": "格鲁吉亚", "AM": "亚美尼亚", "AZ": "阿塞拜疆", "BY": "白俄罗斯",
+    "IR": "伊朗", "IQ": "伊拉克", "SY": "叙利亚", "AF": "阿富汗", "KP": "朝鲜",
+    "MO": "中国澳门", "PR": "波多黎各", "JM": "牙买加", "BS": "巴哈马", "TT": "特立尼达和多巴哥",
+    "LU": "卢森堡", "LI": "列支敦士登", "SM": "圣马力诺", "VA": "梵蒂冈", "FO": "法罗群岛",
+    "GL": "格陵兰", "BM": "百慕大", "KY": "开曼群岛", "EU": "欧洲", "XWG": "西德",
+}
+
+
+# ── TMDB genre id -> 中文类型 静态映射 ──
+GENRE_MAP = {
+    28: "动作", 12: "冒险", 16: "动画", 35: "喜剧", 80: "犯罪",
+    99: "纪录", 18: "剧情", 10751: "家庭", 14: "奇幻", 36: "历史",
+    27: "恐怖", 10402: "音乐", 9648: "悬疑", 10749: "爱情", 878: "科幻",
+    10770: "电视电影", 53: "惊悚", 10752: "战争", 37: "西部",
+}
+
+
 class TmdbCache:
     def __init__(self, db_path=None):
         self.db_path = db_path or CACHE_DB
@@ -107,6 +146,219 @@ class TmdbCache:
                 return [dict(r) for r in exact]
         return [dict(r) for r in rows]
     
+    def search_broad(self, title, year=None, country=None, genre=None,
+                     page=1, page_size=100):
+        """分级泛搜索（v23.54 新增）。
+
+        匹配优先级（用 level 标注）：
+          [精确]  search_key 完全相等（标题+年份）
+          [同年]  标题基键相同、年份不同
+          [模糊]  标题基键为前缀（如输入3词，库里有更长/更短包含）
+        筛选：country（ISO代码或中文名均可）、genre（中文类型名，需库里有 genres 字段）。
+        分页：每页 page_size（默认100），返回 {total, page, page_size, rows:[{...,level}]}。
+        """
+        # 剥离标题中内嵌的 4 位年份（如 "casino.royale.1967"），避免年份被重复计入键
+        import re as _re
+        _m = _re.search(r'(?:^|[\s._-])(\d{4})(?:[\s._-]|$)', title)
+        if _m and not year:
+            year = int(_m.group(1))
+        # 先把分隔符(./_/-)统一为空格，再删年份，避免 "casino.royale" 被粘成 "casinoroyale"
+        _sep = _re.sub(r'[\._\-]', ' ', title)
+        _stripped = _re.sub(r'(?:^|[\s._-])\d{4}(?:[\s._-]|$)', ' ', _sep)
+        _stripped = ' '.join(_stripped.split())
+        key_base = self._normalize_key(_stripped)
+        conn = self._get_conn()
+        # 候选：基键相同（含年份后缀），或基键是某行基键的前缀/后缀
+        cand_sql = """
+            SELECT *, substr(search_key, 1, instr(search_key||'|', '|')-1) AS base
+            FROM movies
+            WHERE base = ? OR base LIKE ? OR ? LIKE (base || '%')
+        """
+        rows = conn.execute(cand_sql, (key_base, key_base + "%", key_base)).fetchall()
+        rows = [dict(r) for r in rows]
+
+        # 分级
+        exact, same_title, fuzzy = [], [], []
+        for r in rows:
+            rk = r["search_key"]
+            rbase = rk.split("|")[0]
+            ryear = int(rk.split("|")[1]) if "|" in rk and rk.split("|")[1].isdigit() else None
+            if rk == key_base + (f"|{year}" if year else ""):
+                r["level"] = "精确"; exact.append(r)
+            elif rbase == key_base:
+                r["level"] = "同年"; same_title.append(r)
+            else:
+                r["level"] = "模糊"; fuzzy.append(r)
+
+        # 年份筛选
+        if year:
+            same_title = [r for r in same_title if r.get("year") == year] + \
+                         [r for r in same_title if r.get("year") != year]
+        # 国家筛选（ISO 或中文名）
+        def _match_country(r):
+            if not country:
+                return True
+            c = country.strip()
+            return (r.get("country", "").upper() == c.upper()) or \
+                   (r.get("country_name", "") == c)
+        # 类型筛选（中文名 -> 需解析 raw_json 的 genres）
+        def _match_genre(r):
+            if not genre:
+                return True
+            g = genre.strip()
+            try:
+                raw = json.loads(r.get("raw_json") or "{}")
+                genres = raw.get("genres") or raw.get("genre_ids") or []
+                names = []
+                for x in genres:
+                    if isinstance(x, dict):
+                        names.append(x.get("name", ""))
+                    elif isinstance(x, int):
+                        names.append(GENRE_MAP.get(x, ""))
+                return g in names
+            except Exception:
+                return False
+
+        merged = []
+        for bucket in (exact, same_title, fuzzy):
+            for r in bucket:
+                if _match_country(r) and _match_genre(r):
+                    merged.append(r)
+        total = len(merged)
+        start = (page - 1) * page_size
+        page_rows = merged[start:start + page_size]
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "pages": (total + page_size - 1) // page_size or 1,
+            "rows": page_rows,
+        }
+
+    def distinct_genres(self):
+        """汇总库里出现过的类型中文名（供筛选下拉用）。"""
+        conn = self._get_conn()
+        names = set()
+        for (raw,) in conn.execute(
+                "SELECT raw_json FROM movies WHERE raw_json != '' LIMIT 20000").fetchall():
+            try:
+                d = json.loads(raw)
+                for x in (d.get("genres") or []):
+                    if isinstance(x, dict) and x.get("name"):
+                        names.add(x["name"])
+            except Exception:
+                continue
+        return sorted(names)
+
+    def apply_country_names(self, limit=None):
+        """零成本补 country_name：用 COUNTRY_MAP 把 ISO 代码转中文（v23.54 新增）。
+
+        返回补齐条数。limit=None 表示全量。
+        """
+        conn = self._get_conn()
+        sql = "SELECT id, country FROM movies WHERE country_name = '' AND country != ''"
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        rows = conn.execute(sql).fetchall()
+        done = 0
+        for r in rows:
+            cn = COUNTRY_MAP.get((r["country"] or "").upper(), "")
+            if cn:
+                conn.execute("UPDATE movies SET country_name=? WHERE id=?",
+                             (cn, r["id"]))
+                done += 1
+        conn.commit()
+        return done
+
+    def strengthen_missing(self, api_key, interval=20, stop_check=None,
+                           on_log=None, on_progress=None, batch_limit=0):
+        """自动强化（v23.54 新增）：用 TMDB 官方 API 批量补 title_zh + country_name。
+
+        - 拉取 title_zh 为空的记录（batch_limit>0 时限制条数，便于测试）
+        - 每条：search/movie 拿中文标题 + 详情补中文国名；限速 interval 秒/条
+        - stop_check 为 callable，返回 True 时中止；on_log/on_progress 回调
+        - 不依赖主界面扫描，工具自己强化自己数据
+        返回 (processed, updated)。
+        """
+        import requests
+        import time
+        conn = self._get_conn()
+        sql = "SELECT id, title_en, year FROM movies WHERE title_zh = '' AND title_en != ''"
+        if batch_limit:
+            sql += f" LIMIT {int(batch_limit)}"
+        todo = conn.execute(sql).fetchall()
+        total = len(todo)
+        processed = updated = 0
+        for r in todo:
+            if stop_check and stop_check():
+                if on_log:
+                    on_log("⏹ 收到停止信号，中止强化。")
+                break
+            mid_title, myear, mid = r["title_en"], r["year"], r["id"]
+            try:
+                # 1) 搜索拿到 tmdb_id + 中文标题（zh-CN 区域）
+                s_url = "https://api.themoviedb.org/3/search/movie"
+                params = {"api_key": api_key, "query": mid_title,
+                          "language": "zh-CN", "include_adult": False}
+                if myear:
+                    params["year"] = myear
+                resp = requests.get(s_url, params=params, timeout=15)
+                if resp.status_code != 200:
+                    if on_log:
+                        on_log(f"  ✗ [{mid_title}] API {resp.status_code}")
+                    processed += 1
+                    time.sleep(interval)
+                    continue
+                sdata = resp.json()
+                res = (sdata.get("results") or [])
+                if not res:
+                    if on_log:
+                        on_log(f"  · [{mid_title}] 无搜索结果")
+                    processed += 1
+                    time.sleep(interval)
+                    continue
+                top = res[0]
+                title_zh = top.get("title") or top.get("original_title") or ""
+                tmdb_id = top.get("id")
+                country_name = ""
+                country = ""
+                # 2) 详情补国家（production_countries）
+                if tmdb_id:
+                    d_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+                    dresp = requests.get(d_url,
+                                         params={"api_key": api_key,
+                                                 "language": "zh-CN"}, timeout=15)
+                    if dresp.status_code == 200:
+                        dd = dresp.json()
+                        pcs = dd.get("production_countries") or []
+                        if pcs:
+                            country = pcs[0].get("iso_3166_1", "")
+                            country_name = pcs[0].get("name", "") or \
+                                COUNTRY_MAP.get(country.upper(), "")
+                if not country_name and country:
+                    country_name = COUNTRY_MAP.get(country.upper(), "")
+                if title_zh or country_name:
+                    conn.execute("""
+                        UPDATE movies SET title_zh=?, country=?, country_name=?,
+                        tmdb_id=?, updated_at=? WHERE id=?
+                    """, (title_zh, country, country_name,
+                          tmdb_id, datetime.datetime.now().isoformat(), mid))
+                    conn.commit()
+                    updated += 1
+                    if on_log:
+                        on_log(f"  ✓ [{mid_title}] zh={title_zh} cn={country_name}")
+                else:
+                    if on_log:
+                        on_log(f"  · [{mid_title}] 无中文信息")
+            except Exception as e:
+                if on_log:
+                    on_log(f"  ✗ [{mid_title}] 异常 {e}")
+            processed += 1
+            if on_progress:
+                on_progress(processed, total, updated)
+            time.sleep(interval)
+        return processed, updated
+
     def save(self, title, year, data):
         """保存一条 TMDB 查询结果到缓存。data 为 dict"""
         key = self._normalize_key(title, year)

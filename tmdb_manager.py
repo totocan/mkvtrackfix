@@ -25,10 +25,35 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextEdit, QFileDialog, QGroupBox,
     QLineEdit, QCheckBox, QSpinBox, QProgressBar, QMessageBox,
-    QTabWidget, QFormLayout, QFrame, QSplitter,
+    QTabWidget, QFormLayout, QFrame, QSplitter, QComboBox,
+    QTableWidget, QTableWidgetItem,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
+
+
+def _cfg_path():
+    return os.path.join(_APP_ROOT, "config.json")
+
+
+def load_config():
+    try:
+        if os.path.exists(_cfg_path()):
+            with open(_cfg_path(), "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+
+def save_config_key(key, value):
+    d = load_config()
+    d[key] = value
+    try:
+        with open(_cfg_path(), "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
 
 
 class ImportWorker(QThread):
@@ -163,6 +188,62 @@ class ScanWorker(QThread):
             return None
 
 
+class BroadSearchWorker(QThread):
+    """泛搜索（分级+分页），后台执行避免大库卡 UI。"""
+    result = pyqtSignal(dict)
+    log = pyqtSignal(str)
+
+    def __init__(self, title, year, country, genre, page, page_size=100):
+        super().__init__()
+        self.title = title
+        self.year = year
+        self.country = country
+        self.genre = genre
+        self.page = page
+        self.page_size = page_size
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        cache = TmdbCache()
+        try:
+            res = cache.search_broad(self.title, self.year, self.country,
+                                     self.genre, self.page, self.page_size)
+            self.result.emit(res)
+        except Exception as e:
+            self.log.emit(f"搜索失败: {e}")
+
+
+class StrengthenWorker(QThread):
+    """自动强化：TMDB API 批量补 title_zh + country_name（v23.54 新增）。"""
+    log = pyqtSignal(str)
+    progress = pyqtSignal(int, int, int)  # processed, total, updated
+    done = pyqtSignal(int, int)
+
+    def __init__(self, api_key, interval, batch_limit=0):
+        super().__init__()
+        self.api_key = api_key
+        self.interval = interval
+        self.batch_limit = batch_limit
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        cache = TmdbCache()
+        try:
+            processed, updated = cache.strengthen_missing(
+                self.api_key, interval=self.interval,
+                stop_check=lambda: self._stop,
+                on_log=lambda m: self.log.emit(m),
+                on_progress=lambda p, t, u: self.progress.emit(p, t, u),
+                batch_limit=self.batch_limit)
+            self.done.emit(processed, updated)
+        except Exception as e:
+            self.log.emit(f"强化异常: {e}")
+
+
 class TmdbManager(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -253,6 +334,95 @@ class TmdbManager(QMainWindow):
         vl3.addLayout(hb)
         tabs.addTab(tab_scan, "预拉取")
 
+        # ===== 标签页4: 泛搜索 =====
+        tab_search = QWidget()
+        sl = QVBoxLayout(tab_search)
+        sf = QFormLayout()
+        self.le_query = QLineEdit()
+        self.le_query.setPlaceholderText("输入电影名，可含 . 分隔，如 casino.royale.1967")
+        sf.addRow("关键词:", self.le_query)
+        self.le_year = QLineEdit()
+        self.le_year.setPlaceholderText("可选，如 1967")
+        sf.addRow("年份:", self.le_year)
+        self.cb_country = QLineEdit()
+        self.cb_country.setPlaceholderText("可选，国家代码或中文名，如 US / 美国")
+        sf.addRow("国家:", self.cb_country)
+        from core.tmdb_cache import TmdbCache
+        _genres = []
+        try:
+            _genres = TmdbCache().distinct_genres()
+        except Exception:
+            _genres = []
+        self.cb_genre = QComboBox()
+        self.cb_genre.addItem("（全部类型）")
+        self.cb_genre.addItems(_genres)
+        sf.addRow("类型:", self.cb_genre)
+        sl.addLayout(sf)
+        hb_s = QHBoxLayout()
+        self.btn_search = QPushButton("🔍 搜索")
+        self.btn_search.clicked.connect(self._do_search)
+        hb_s.addWidget(self.btn_search)
+        hb_s.addStretch()
+        # 分页
+        self.btn_prev = QPushButton("◀ 上一页")
+        self.btn_prev.clicked.connect(lambda: self._page(-1))
+        self.btn_next = QPushButton("下一页 ▶")
+        self.btn_next.clicked.connect(lambda: self._page(1))
+        self.lbl_page = QLabel("第 0 / 0 页")
+        hb_s.addWidget(self.btn_prev)
+        hb_s.addWidget(self.lbl_page)
+        hb_s.addWidget(self.btn_next)
+        sl.addLayout(hb_s)
+        self.tbl_search = QTableWidget()
+        self.tbl_search.setColumnCount(6)
+        self.tbl_search.setHorizontalHeaderLabels(
+            ["匹配", "英文标题", "中文标题", "年份", "国家", "语言"])
+        self.tbl_search.horizontalHeader().setStretchLastSection(True)
+        self.tbl_search.setEditTriggers(QTableWidget.NoEditTriggers)
+        sl.addWidget(self.tbl_search, 1)
+        tabs.addTab(tab_search, "🔍 泛搜索")
+        self._search_page = 1
+        self._search_last = None
+
+        # ===== 标签页5: 自动强化 =====
+        tab_str = QWidget()
+        xl = QVBoxLayout(tab_str)
+        xf = QFormLayout()
+        self.le_apikey = QLineEdit()
+        self.le_apikey.setEchoMode(QLineEdit.Password)
+        self.le_apikey.setPlaceholderText("TMDB API Key (v3 auth)")
+        _cfg = load_config()
+        if _cfg.get("tmdb_api_key"):
+            self.le_apikey.setText(_cfg["tmdb_api_key"])
+        xf.addRow("API Key:", self.le_apikey)
+        self.btn_save_key = QPushButton("💾 保存 Key")
+        self.btn_save_key.clicked.connect(self._save_apikey)
+        xf.addRow(self.btn_save_key)
+        self.cb_interval = QComboBox()
+        for s in [5, 10, 15, 20, 30]:
+            self.cb_interval.addItem(f"{s} 秒/条", s)
+        self.cb_interval.setCurrentIndex(3)  # 默认 20 秒
+        xf.addRow("爬取间隔:", self.cb_interval)
+        xl.addLayout(xf)
+        hb_x = QHBoxLayout()
+        self.btn_conv_country = QPushButton("🌐 转中文国名（本地零成本）")
+        self.btn_conv_country.clicked.connect(self._convert_country)
+        hb_x.addWidget(self.btn_conv_country)
+        self.btn_strengthen = QPushButton("🕷 开始强化（补中文名）")
+        self.btn_strengthen.clicked.connect(self._start_strengthen)
+        hb_x.addWidget(self.btn_strengthen)
+        self.btn_stop_str = QPushButton("⏹ 停止")
+        self.btn_stop_str.clicked.connect(self._stop_strengthen)
+        self.btn_stop_str.setEnabled(False)
+        hb_x.addWidget(self.btn_stop_str)
+        xl.addLayout(hb_x)
+        self.pb_str = QProgressBar()
+        xl.addWidget(self.pb_str)
+        xl.addWidget(QLabel("说明：强化只补 title_zh / country_name，不依赖主界面扫描，"
+                            "可挂机后台运行。"))
+        xl.addStretch()
+        tabs.addTab(tab_str, "🕷 自动强化")
+
         # ===== 日志 =====
         self.log = QTextEdit()
         self.log.setReadOnly(True)
@@ -318,6 +488,99 @@ class TmdbManager(QMainWindow):
             self._log("已发送停止信号，等待当前查询完成...")
         self.btn_start_scan.setEnabled(True)
         self.btn_stop_scan.setEnabled(False)
+
+    # ===== 泛搜索 =====
+    def _do_search(self):
+        q = self.le_query.text().strip()
+        if not q:
+            QMessageBox.warning(self, "提示", "请输入关键词")
+            return
+        yr = self.le_year.text().strip()
+        year = int(yr) if yr.isdigit() else None
+        country = self.cb_country.text().strip() or None
+        genre = self.cb_genre.currentText()
+        genre = genre if genre and genre != "（全部类型）" else None
+        self._search_page = 1
+        self._run_search(q, year, country, genre)
+
+    def _page(self, delta):
+        if not self._search_last:
+            return
+        new = self._search_page + delta
+        if new < 1 or new > self._search_last["pages"]:
+            return
+        self._search_page = new
+        r = self._search_last
+        self._run_search_from(r["_q"], r["_year"], r["_country"], r["_genre"])
+
+    def _run_search(self, q, year, country, genre):
+        self._search_q = (q, year, country, genre)
+        self._run_search_from(q, year, country, genre)
+
+    def _run_search_from(self, q, year, country, genre):
+        self.btn_search.setEnabled(False)
+        w = BroadSearchWorker(q, year, country, genre, self._search_page, 100)
+        w.result.connect(lambda res: self._show_search(res, q, year, country, genre))
+        w.log.connect(self._log)
+        w.start()
+
+    def _show_search(self, res, q, year, country, genre):
+        self.btn_search.setEnabled(True)
+        self._search_last = dict(res)
+        self._search_last.update(_q=q, _year=year, _country=country, _genre=genre)
+        self.lbl_page.setText(f"第 {res['page']} / {res['pages']} 页（共 {res['total']} 条）")
+        self.tbl_search.setRowCount(len(res["rows"]))
+        for i, r in enumerate(res["rows"]):
+            lvl = r.get("level", "")
+            self.tbl_search.setItem(i, 0, QTableWidgetItem(lvl))
+            self.tbl_search.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
+            self.tbl_search.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
+            self.tbl_search.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
+            self.tbl_search.setItem(i, 4, QTableWidgetItem(
+                r.get("country_name") or r.get("country") or ""))
+            self.tbl_search.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
+
+    # ===== 自动强化 =====
+    def _save_apikey(self):
+        k = self.le_apikey.text().strip()
+        if not k:
+            QMessageBox.warning(self, "提示", "请输入 API Key")
+            return
+        save_config_key("tmdb_api_key", k)
+        QMessageBox.information(self, "已保存", "TMDB API Key 已写入 config.json")
+
+    def _convert_country(self):
+        from core.tmdb_cache import TmdbCache
+        cache = TmdbCache()
+        n = cache.apply_country_names()
+        self._log(f"🌐 已补齐中文国名 {n:,} 条（ISO→中文静态映射）")
+        self._refresh_stats()
+
+    def _start_strengthen(self):
+        k = self.le_apikey.text().strip() or load_config().get("tmdb_api_key", "")
+        if not k:
+            QMessageBox.warning(self, "提示", "请先填写并保存 TMDB API Key")
+            return
+        interval = int(self.cb_interval.currentData() or 20)
+        self.str_worker = StrengthenWorker(k, interval)
+        self.str_worker.log.connect(self._log)
+        self.str_worker.progress.connect(
+            lambda p, t, u: (self.pb_str.setValue(int(p * 100 / t)) if t else None,
+                             self._log(f"进度 {p}/{t} 已更新 {u}")))
+        self.str_worker.done.connect(lambda p, u: (
+            self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条"),
+            self.pb_str.setValue(100), self._refresh_stats(),
+            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False)))
+        self.str_worker.start()
+        self.btn_strengthen.setEnabled(False)
+        self.btn_stop_str.setEnabled(True)
+
+    def _stop_strengthen(self):
+        if self.str_worker:
+            self.str_worker.stop()
+            self._log("⏹ 已发送停止信号，等待当前请求完成后中止...")
+        self.btn_strengthen.setEnabled(True)
+        self.btn_stop_str.setEnabled(False)
 
 
 def main():
