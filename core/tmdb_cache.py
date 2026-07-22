@@ -98,9 +98,14 @@ class TmdbCache:
             CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
             CREATE INDEX IF NOT EXISTS idx_movies_year ON movies(year);
             CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);
-            INSERT INTO schema_version (version) 
+            INSERT INTO schema_version (version)
             SELECT {v} WHERE NOT EXISTS (SELECT 1 FROM schema_version);
         """.format(v=_SCHEMA_VERSION))
+        # 收集统计信息，让查询优化器为索引选择更准确（v23.55：老库打开自动补）
+        try:
+            conn.execute("ANALYZE")
+        except Exception:
+            pass
         conn.commit()
     
     def _normalize_key(self, title, year=None):

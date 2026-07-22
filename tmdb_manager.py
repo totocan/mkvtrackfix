@@ -375,10 +375,10 @@ class TmdbManager(QMainWindow):
         self.le_query = QLineEdit()
         self.le_query.setPlaceholderText("输入电影名，可含 . 分隔，如 casino.royale.1967")
         sf.addRow("关键词:", self.le_query)
-        # 年份下拉档位（X年以前 = year <= X）
+        # 年份下拉档位（X年以前 = year <= X），倒序：全部→2030→…→1910
         self.cb_year = QComboBox()
         self.cb_year.addItem("全部年份", 0)
-        for y in list(range(1910, 2011, 10)) + [2015, 2020, 2025, 2030]:
+        for y in [2030, 2025, 2020, 2015] + list(range(2010, 1909, -10)):
             self.cb_year.addItem(f"{y}年以前", y)
         sf.addRow("年份:", self.cb_year)
         self.cb_country = QLineEdit()
