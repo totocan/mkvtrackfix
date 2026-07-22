@@ -171,14 +171,17 @@ class TmdbManager(QMainWindow):
         self._init_ui()
 
     def _init_ui(self):
-        # v23.51: 字号与主程序设置联动
+        # v23.52: 字号与主程序设置联动（直接读 config.json，避免触发 logger 初始化）
+        size, family = 10, "Microsoft YaHei UI"
         try:
-            from core import config as _cfg
-            _c = _cfg.load() if hasattr(_cfg, "load") else {}
-            size = int(_c.get("gui_font_size", 10))
-            family = _c.get("gui_font_family", "") or "Microsoft YaHei UI"
+            _cfg_path = os.path.join(_APP_ROOT, "config.json")
+            if os.path.exists(_cfg_path):
+                with open(_cfg_path, "r", encoding="utf-8") as _f:
+                    _d = json.load(_f)
+                size = int(_d.get("gui_font_size", 10))
+                family = _d.get("gui_font_family", "") or "Microsoft YaHei UI"
         except Exception:
-            size, family = 10, "Microsoft YaHei UI"
+            pass
         self._ui_font = QFont(family, size)
         self._mono_font = QFont("Consolas", max(9, size - 1))
         self.setFont(self._ui_font)
@@ -202,8 +205,6 @@ class TmdbManager(QMainWindow):
         # ===== 标签页2: 初始化 =====
         tab_init = QWidget()
         vl2 = QVBoxLayout(tab_init)
-        from PyQt5.QtGui import QDesktopServices
-        from PyQt5.QtCore import QUrl
         link = QLabel(
             '<a href="https://www.kaggle.com/datasets/alanvourch/tmdb-movies-daily-updates">'
             '📥 打开 Kaggle 数据集下载页面</a><br>'
@@ -322,6 +323,11 @@ class TmdbManager(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
+    # v23.52: Qt 中文翻译（和主程序保持一致）
+    from PyQt5.QtCore import QTranslator, QLocale, QLibraryInfo
+    _tr = QTranslator()
+    if _tr.load(QLocale.system(), 'qt', '_', QLibraryInfo.location(QLibraryInfo.TranslationsPath)):
+        app.installTranslator(_tr)
     w = TmdbManager()
     w.show()
     w.showMaximized()
