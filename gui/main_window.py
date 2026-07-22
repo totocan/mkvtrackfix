@@ -954,17 +954,17 @@ class MainWindow(QMainWindow):
                 track_lines = []
                 for t in tracks:
                     if t.track_type == "video":
-                        codec = (t.codec or "").upper()
+                        vcodec = (t.codec or "").upper()
                         w = getattr(t, "width", 0) or 0
                         h = getattr(t, "height", 0) or 0
-                        # 统一走 codec.resolution_label（标准档位 + 容差对齐，宽度优先）
+                        # 统一走模块 codec.resolution_label（标准档位 + 容差对齐，宽度优先）
                         res = codec.resolution_label(w, h) or "?"
-                        track_lines.append(f"🎬 #{t.track_id} {codec} {res}")
+                        track_lines.append(f"🎬 #{t.track_id} {vcodec} {res}")
                     elif t.track_type == "audio":
                         lang = t.language_raw or "und"
-                        codec = (t.codec or "").upper()
+                        acodec = (t.codec or "").upper()
                         ch = f"{t.channels or '?'}ch"
-                        track_lines.append(f"🎵 #{t.track_id} {codec} {ch} {lang}")
+                        track_lines.append(f"🎵 #{t.track_id} {acodec} {ch} {lang}")
                     elif t.track_type == "subtitle":
                         desc = t.codec or ""
                         raw = t.language_raw or "und"
