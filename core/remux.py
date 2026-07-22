@@ -11,31 +11,24 @@ import os
 from . import utils, logger
 
 
-def compute_output_path(src, config, tracks=None, orig_path=None):
+def compute_output_path(src, config, tracks=None):
     """根据配置计算输出路径。
-
-    v23: 新增 orig_path 参数。当 orig_path 设置时，输出目录使用 orig_path 的所在目录
-         （NAS 原目录），文件名仍基于 src（本地缓存）计算。
 
     smart_rename=True  → 用 namer 生成规范文件名
     smart_rename=False → 旧 .fixed 后缀模式
     """
     cfg = config or {}
     suffix = cfg.get("output_suffix", ".fixed")
-
-    # 确定输出目录：优先使用 orig_path 的目录（NAS），否则用 src 目录
-    out_dir = os.path.dirname(os.path.abspath(orig_path)) if orig_path else os.path.dirname(os.path.abspath(src))
-
     if cfg.get("smart_rename", True):
         from . import namer
         movie_info = cfg.get("_tmdb_movie_info", {})
         name = namer.generate_name(src, tracks or [], config, movie_info=movie_info)
-        return os.path.join(out_dir, name)
+        return os.path.join(os.path.dirname(os.path.abspath(src)), name)
     # 旧后缀模式
     ext = os.path.splitext(src)[1].lower()
     if ext in (".mp4", ".m4v"):
-        return os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + ".mkv")
-    return os.path.join(out_dir, os.path.splitext(os.path.basename(src))[0] + suffix + ".mkv")
+        return os.path.splitext(src)[0] + ".mkv"
+    return os.path.splitext(src)[0] + suffix + ".mkv"
 
 
 def _mkvmerge(config):
@@ -118,14 +111,30 @@ def build_command(tracks, src, out, config):
                     "english": 4}
     sub_ids = [str(t.track_id) for t in tracks
                if t.track_type == "subtitle" and t.action == "keep"]
-    if sub_ids:
-        best_sub = min(sub_ids,
+    # v23.54: 分离外挂字幕（external_path 有值）
+    ext_subs = [t for t in tracks
+                if t.track_type == "subtitle" and t.action == "keep"
+                and getattr(t, "external_path", None)]
+    int_sub_ids = [str(t.track_id) for t in tracks
+                   if t.track_type == "subtitle" and t.action == "keep"
+                   and not getattr(t, "external_path", None)]
+    if int_sub_ids:
+        best_sub = min(int_sub_ids,
                        key=lambda tid: sub_priority.get(
                            next(getattr(t, "detected_kind", "other") for t in tracks
                                 if str(t.track_id) == tid), 99))
-        for tid in sub_ids:
+        for tid in int_sub_ids:
             flag = 1 if tid == best_sub else 0
             cmd += [f"--default-track", f"{tid}:{flag}"]
+        cmd += ["--subtitle-tracks", ",".join(int_sub_ids)]
+
+    # v23.54: 外挂字幕附加到主输入文件之后
+    for et in ext_subs:
+        ext_path = getattr(et, "external_path", None)
+        if ext_path:
+            cmd += ["--language", f"0:{et.detected_iso or 'und'}",
+                    "--track-name", f"0:{et.detected_name or 'External'}"]
+            cmd.append(ext_path)
 
     if kept_audio:
         cmd += ["--audio-tracks", ",".join(kept_audio)]
@@ -214,20 +223,17 @@ def _verify(out, tracks, config):
     return True, "ok"
 
 
-def remux(tracks, src, config, log=None, progress_callback=None, orig_path=None):
+def remux(tracks, src, config, log=None, progress_callback=None):
     """执行转封装。返回 (ok: bool, out_path: str, msg: str)。
 
-    v23: 新增 orig_path 参数。当 orig_path 设置时，输出写入 orig_path 所在目录（NAS），
-         mkvmerge 输入仍从 src（本地缓存）读取。
-
-    orig_path — 原始路径（NAS），用于确定输出目标目录
+    输出直接写入目标路径（智能重命名或 .fixed 后缀）。
     progress_callback(pct): 可选，接收进度百分比 0-100。
     """
     def L(m, level="info"):
         if log:
             log(m, level)
 
-    out = compute_output_path(src, config, tracks, orig_path=orig_path)
+    out = compute_output_path(src, config, tracks)
     # 清理 TMDB 缓存，避免影响下一个文件
     config.pop("_tmdb_movie_info", None)
 

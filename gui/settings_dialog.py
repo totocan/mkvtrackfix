@@ -298,7 +298,12 @@ class SettingsDialog(QDialog):
         pf_row.addStretch()
         rl.addLayout(pf_row)
 
-        rl.addSpacing(16)
+        rl.addSpacing(8)
+        # v23.54: 合并外挂字幕
+        self.cb_ext_subs = QCheckBox("合并外挂文本字幕(srt/ass)")
+        self.cb_ext_subs.setToolTip("扫描时收集同目录的文本字幕文件，处理后合并到输出文件")
+        rl.addWidget(self.cb_ext_subs)
+        rl.addSpacing(8)
 
         # —— 赞赏区 ——
         title = QLabel("🍚 在线要饭")
@@ -485,6 +490,7 @@ class SettingsDialog(QDialog):
         # v23.42: 预缓存提前量
         idx = self.cb_prefetch.findText(str(int(c.get("prefetch_ahead", 2))))
         if idx >= 0: self.cb_prefetch.setCurrentIndex(idx)
+        self.cb_ext_subs.setChecked(c.get("merge_external_subs", True))
 
         # v23.37: 加载赞赏码
         self._load_donate_qr()
@@ -541,6 +547,7 @@ class SettingsDialog(QDialog):
             c["keep_ocr_frames"] = self.bx_keep_ocr.isChecked()
             # v23.42: 预缓存提前量
             c["prefetch_ahead"] = int(self.cb_prefetch.currentText())
+            c["merge_external_subs"] = self.cb_ext_subs.isChecked()
             # v23.33: 微信推送
             c["wechat_push_enabled"] = self.bx_wechat_push.isChecked()
             c["serverchan_key"] = self.le_serverchan.text().strip()

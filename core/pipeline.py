@@ -8,6 +8,7 @@
     会自动尝试从全局缓存环境或传入参数中寻找本地缓存，确保 100% 走本地极速 I/O。
 """
 import os
+import re
 
 from . import (audio_detect, douban, lang_map, policy, probe, remux,
                subtitle_detect, utils, logger)
@@ -346,6 +347,68 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
             t.note = f"提取失败，启发式推断为{inferred_name}(来源:{source})"
             L(f"    字幕#{t.track_id} 提取失败 -> 启发式推断: {inferred_name}({inferred_iso})")
 
+    # v23.54: 扫描同目录外挂文本字幕（srt/ass/ssa）
+    if config.get("merge_external_subs", True):
+        ext_dir = os.path.dirname(orig_path) if orig_path else os.path.dirname(path)
+        ext_subs = []
+        for ext in (".srt", ".ass", ".ssa", ".vtt"):
+            for f in os.listdir(ext_dir):
+                if f.lower().endswith(ext) and f not in ext_subs:
+                    ext_subs.append(f)
+        # 排除视频自己的文件名
+        video_basename = os.path.splitext(os.path.basename(orig_path or path))[0].lower()
+        ext_subs = [f for f in ext_subs
+                    if os.path.splitext(f)[0].lower() != video_basename]
+        if ext_subs:
+            # 给每个外挂字幕创建 Track 对象
+            from .probe import Track
+            next_id = max((t.track_id for t in tracks), default=0) + 1
+            seen_names = set()
+            for sf in sorted(ext_subs):
+                sf_path = os.path.join(ext_dir, sf)
+                # 文件太小（<10B）或太大（>5MB？文本字幕不可能这么大）跳过
+                try:
+                    fsz = os.path.getsize(sf_path)
+                except Exception:
+                    continue
+                if fsz < 10:
+                    continue
+                # 通过文件扩展名判断格式
+                ext_lower = sf.lower()
+                codec_map = {".srt": "SubRip", ".ass": "ASS", ".ssa": "ASS", ".vtt": "WebVTT"}
+                codec = codec_map.get(os.path.splitext(ext_lower)[1], "SubRip")
+                # 简单语言推断：读取文件前 2KB 看是否包含中文
+                try:
+                    with open(sf_path, "r", encoding="utf-8", errors="ignore") as _fh:
+                        head = _fh.read(2048)
+                    has_cn = any('\u4e00' <= c <= '\u9fff' for c in head)
+                    is_bilingual = has_cn and bool(re.search(r'[a-zA-Z]{3,}', head))
+                    if has_cn and is_bilingual:
+                        iso, name, kind = "cmn-Hans", "简中英双语", "bilingual"
+                    elif has_cn:
+                        iso, name, kind = "cmn-Hans", "简体中文", "chinese_simplified"
+                    else:
+                        iso, name, kind = "eng", "English", "english"
+                except Exception:
+                    iso, name, kind = "und", "未知", "unknown"
+                # 避免同名文件被重复加入
+                display_name = f"外挂.{os.path.splitext(sf)[0]}"
+                if display_name in seen_names:
+                    continue
+                seen_names.add(display_name)
+                # 创建 Track，设置 external_path 标记为外挂
+                et = Track(stream_index=next_id, track_id=next_id,
+                           track_type="subtitle", codec=codec)
+                et.external_path = sf_path
+                et.detected_iso = iso
+                et.detected_name = name
+                et.detected_kind = kind
+                et.action = "keep"
+                et.language = iso
+                et.title = f"[外部字幕] {sf}"
+                tracks.append(et)
+                next_id += 1
+                L(f"    外挂字幕: {sf} -> {name}({iso})")
     # ---- 4. 生成轨道名 ----
     for t in tracks:
         if t.track_type == "audio":

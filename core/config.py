@@ -85,6 +85,7 @@ DEFAULTS = {
     "debug_mode": False,
     "keep_ocr_frames": False,    # v23.21: 保留OCR帧/WAV文件供排查（不清tmp/N/temp/）
     "prefetch_ahead": 2,         # v23.42: 预缓存提前几个任务（默认 2，最大 20）
+    "merge_external_subs": True, # v23.54: 扫描时收集同目录外挂文本字幕，处理后合并
 
     # —— 任务完成推送（v23.33 → v23.51: ServerChan）——
     "wechat_push_enabled": False,  # 是否启用推送
