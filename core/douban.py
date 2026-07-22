@@ -346,6 +346,24 @@ def classify_movie(path, config):
         logger.log(f"产地判断: 无法提取英文电影名: {os.path.basename(path)}", "PIPELINE")
         return result
 
+    # v23.49: 查本地 TMDB 缓存
+    try:
+        from .tmdb_cache import TmdbCache
+        cache = TmdbCache()
+        cached = cache.lookup(title_en, year)
+        if cached and cached.get("tmdb_id"):
+            result["is_domestic"] = (cached["country"] in _DOMESTIC_COUNTRIES)
+            result["native_lang"] = cached.get("language", "und") or "und"
+            result["native_lang_name"] = _LANG_NAMES.get(result["native_lang"], "未知")
+            result["source"] = "tmdb_cache"
+            result["country"] = cached.get("country", "")
+            result["country_name"] = cached.get("country_name", "")
+            result["title_zh"] = cached.get("title_zh", "")
+            logger.log(f"产地判断: TMDB 缓存命中 -> country='{cached.get('country','')}'", "PIPELINE")
+            return result
+    except Exception:
+        pass
+
     # Step 2: TMDB 搜索 → 取 movie_id
     movie_id = _search_movie_id(title_en, year)
     if not movie_id:
@@ -372,6 +390,21 @@ def classify_movie(path, config):
     result["source"] = "tmdb"
     logger.log(f"产地判断: TMDB 返回 country='{country_code}' language='{language_text}'",
                "PIPELINE")
+
+    # v23.49: 写入本地缓存
+    try:
+        from .tmdb_cache import TmdbCache
+        TmdbCache().save(title_en, year, {
+            "title_en": title_en,
+            "title_zh": title_zh,
+            "country": country_code,
+            "country_name": _COUNTRY_NAMES.get(country_code, ""),
+            "language": language_text,
+            "tmdb_id": movie_id,
+            "source": "tmdb",
+        })
+    except Exception:
+        pass
 
     # Step 4: 根据国家代码判定是否国产
     if country_code in _DOMESTIC_COUNTRIES:
