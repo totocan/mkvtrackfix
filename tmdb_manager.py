@@ -265,6 +265,19 @@ class ConvertCountryWorker(QThread):
             self.log.emit(f"转国名异常: {e}")
 
 
+class GenreLoadWorker(QThread):
+    """后台加载类型列表（避免大库 distinct_genres 卡 UI）。"""
+    loaded = pyqtSignal(list)
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            genres = TmdbCache().distinct_genres()
+            self.loaded.emit(genres)
+        except Exception:
+            self.loaded.emit([])
+
+
 class TmdbManager(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -371,15 +384,11 @@ class TmdbManager(QMainWindow):
         self.cb_country = QLineEdit()
         self.cb_country.setPlaceholderText("可选，国家代码或中文名，如 US / 美国")
         sf.addRow("国家:", self.cb_country)
-        from core.tmdb_cache import TmdbCache
-        _genres = []
-        try:
-            _genres = TmdbCache().distinct_genres()
-        except Exception:
-            _genres = []
+        # 类型下拉初始化时不查库（避免大库卡死 UI），搜索时后台懒加载填充
         self.cb_genre = QComboBox()
         self.cb_genre.addItem("（全部类型）")
-        self.cb_genre.addItems(_genres)
+        self.cb_genre.addItem("（加载中…）")
+        self._genres_loaded = False
         sf.addRow("类型:", self.cb_genre)
         sl.addLayout(sf)
         hb_s = QHBoxLayout()
@@ -552,6 +561,9 @@ class TmdbManager(QMainWindow):
         if not q:
             QMessageBox.warning(self, "提示", "请输入关键词")
             return
+        # 首次搜索时后台懒加载类型列表（避免初始化卡大库）
+        if not self._genres_loaded:
+            self._load_genres_async()
         # 年份下拉：全部=0，否则为 year_max（X年以前）
         ym = int(self.cb_year.currentData() or 0)
         year_max = ym if ym else None
@@ -581,6 +593,19 @@ class TmdbManager(QMainWindow):
         w.result.connect(lambda res: self._show_search(res, q, year, year_max, country, genre))
         w.log.connect(self._log)
         w.start()
+
+    def _load_genres_async(self):
+        """后台拉类型列表填充下拉（避免初始化同步查大库卡死）。"""
+        self._genres_loaded = True  # 标记已触发，避免重复
+        self.gw = GenreLoadWorker()
+        self.gw.loaded.connect(self._on_genres_loaded)
+        self.gw.start()
+
+    def _on_genres_loaded(self, genres):
+        self.cb_genre.clear()
+        self.cb_genre.addItem("（全部类型）")
+        self.cb_genre.addItems(genres)
+        self._log(f"📂 类型列表已加载：{len(genres)} 种")
 
     def _show_search(self, res, q, year, year_max, country, genre):
         self.btn_search.setEnabled(True)

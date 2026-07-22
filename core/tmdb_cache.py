@@ -168,13 +168,17 @@ class TmdbCache:
         _stripped = ' '.join(_stripped.split())
         key_base = self._normalize_key(_stripped)
         conn = self._get_conn()
-        # 候选：基键相同（含年份后缀），或基键是某行基键的前缀/后缀
+        # 候选：优先用 search_key 上的索引（idx_movies_search），避免对 96 万行
+        # 计算列 base 全表扫描导致 OOM/卡死。
+        # search_key 格式 "casino royale|1967"，前缀 "casino royale|%" 命中索引，
+        # 覆盖[精确]+[同年]；模糊含入用 "%casino royale%" 兜底。
         cand_sql = """
-            SELECT *, substr(search_key, 1, instr(search_key||'|', '|')-1) AS base
+            SELECT *
             FROM movies
-            WHERE base = ? OR base LIKE ? OR ? LIKE (base || '%')
+            WHERE search_key LIKE ? OR search_key LIKE ?
+            LIMIT 5000
         """
-        rows = conn.execute(cand_sql, (key_base, key_base + "%", key_base)).fetchall()
+        rows = conn.execute(cand_sql, (key_base + "|%", "%" + key_base + "%")).fetchall()
         rows = [dict(r) for r in rows]
 
         # 分级
