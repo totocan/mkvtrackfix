@@ -167,11 +167,22 @@ class TmdbManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TMDB 缓存管理器")
-        self.resize(700, 500)
         self.scan_worker = None
         self._init_ui()
 
     def _init_ui(self):
+        # v23.51: 字号与主程序设置联动
+        try:
+            from core import config as _cfg
+            _c = _cfg.load() if hasattr(_cfg, "load") else {}
+            size = int(_c.get("gui_font_size", 10))
+            family = _c.get("gui_font_family", "") or "Microsoft YaHei UI"
+        except Exception:
+            size, family = 10, "Microsoft YaHei UI"
+        self._ui_font = QFont(family, size)
+        self._mono_font = QFont("Consolas", max(9, size - 1))
+        self.setFont(self._ui_font)
+
         tabs = QTabWidget()
         self.setCentralWidget(tabs)
 
@@ -179,7 +190,7 @@ class TmdbManager(QMainWindow):
         tab_overview = QWidget()
         vl = QVBoxLayout(tab_overview)
         self.lbl_stats = QLabel("点击「刷新统计」查看缓存状态")
-        self.lbl_stats.setFont(QFont("Consolas", 10))
+        self.lbl_stats.setFont(self._mono_font)
         self.lbl_stats.setWordWrap(True)
         vl.addWidget(self.lbl_stats)
         btn_refresh = QPushButton("🔄 刷新统计")
@@ -191,11 +202,16 @@ class TmdbManager(QMainWindow):
         # ===== 标签页2: 初始化 =====
         tab_init = QWidget()
         vl2 = QVBoxLayout(tab_init)
-        info = QLabel("从 Kaggle 下载 TMDB_all_movies.csv（~772MB）后，点击下方导入。\n"
-                      "下载地址（需 Kaggle 账号）：\n"
-                      "https://www.kaggle.com/datasets/alanvourch/tmdb-movies-daily-updates")
-        info.setWordWrap(True)
-        info.setStyleSheet("color:#555; padding:8px;")
+        from PyQt5.QtGui import QDesktopServices
+        from PyQt5.QtCore import QUrl
+        link = QLabel(
+            '<a href="https://www.kaggle.com/datasets/alanvourch/tmdb-movies-daily-updates">'
+            '📥 打开 Kaggle 数据集下载页面</a><br>'
+            '<span style="color:#888;font-size:9pt;">约 772MB (CSV)，每日更新，内含 96 万+ 电影元数据</span>')
+        link.setOpenExternalLinks(True)
+        link.setWordWrap(True)
+        link.setStyleSheet("font-size:12pt; padding:8px;")
+        vl2.addWidget(link)
         vl2.addWidget(info)
         btn_sel = QPushButton("📁 选择 CSV 文件并导入")
         btn_sel.clicked.connect(self._import_csv)
@@ -240,8 +256,8 @@ class TmdbManager(QMainWindow):
         # ===== 日志 =====
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFont(QFont("Consolas", 9))
-        self.log.setMaximumHeight(120)
+        self.log.setFont(self._mono_font)
+        self.log.setMinimumHeight(200)
         tabs.addTab(self.log, "日志")
 
         self._refresh_stats()
@@ -308,6 +324,7 @@ def main():
     app = QApplication(sys.argv)
     w = TmdbManager()
     w.show()
+    w.showMaximized()
     sys.exit(app.exec_())
 
 
