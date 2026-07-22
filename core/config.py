@@ -23,12 +23,12 @@ import shutil
 
 
 # 应用版本号：每次迭代 +1（同步修改此处和 README 即可）
-APP_VERSION = "v23.53"
+APP_VERSION = "v23.54"
 
 
 DEFAULTS = {
     # —— 配置版本（v21.2：版本不一致时自动重置为默认值）——
-    "_schema_version": APP_VERSION,
+    "_schema_version": APP_VERSION = "v23.54"
 
     # —— AI 模型 ——
     "model_size": "medium",      # tiny/base/small/medium/large-v3
@@ -188,16 +188,16 @@ def load(path=None):
                 data = json.load(f)
             # v23.44: 无论版本是否匹配，保留用户配置并补充新增的默认键
             stored_version = data.get("_schema_version", "")
-            if stored_version != APP_VERSION:
+            if stored_version != APP_VERSION = "v23.54"
                 try:
                     from . import logger as _lg
-                    _lg.log(f"配置版本从 {stored_version or '(无)'} 升级到 {APP_VERSION}，"
+                    _lg.log(f"配置版本从 {stored_version or '(无)'} 升级到 {APP_VERSION = "v23.54"
                             f"保留已有设置并补充新默认值", "SYSTEM")
                 except Exception:
                     pass
             # 合并：保留用户已有配置，新增的默认键自动补齐
             cfg.update({k: v for k, v in data.items() if k in DEFAULTS})
-            cfg["_schema_version"] = APP_VERSION
+            cfg["_schema_version"] = APP_VERSION = "v23.54"
         except Exception:
             pass
     # 每次启动都验证工具路径并重新探测（避免旧版残留绝对路径）
