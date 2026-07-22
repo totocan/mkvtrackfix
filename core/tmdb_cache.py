@@ -146,15 +146,15 @@ class TmdbCache:
                 return [dict(r) for r in exact]
         return [dict(r) for r in rows]
     
-    def search_broad(self, title, year=None, country=None, genre=None,
-                     page=1, page_size=100):
-        """分级泛搜索（v23.54 新增）。
+    def search_broad(self, title, year=None, year_max=None, country=None,
+                     genre=None, page=1, page_size=100):
+        """分级泛搜索（v23.54 新增，v23.55 扩年份范围+类型中文）。
 
         匹配优先级（用 level 标注）：
           [精确]  search_key 完全相等（标题+年份）
           [同年]  标题基键相同、年份不同
           [模糊]  标题基键为前缀（如输入3词，库里有更长/更短包含）
-        筛选：country（ISO代码或中文名均可）、genre（中文类型名，需库里有 genres 字段）。
+        筛选：year(精确) / year_max(<=上限,如"2020年以前") / country / genre(中英文均可)。
         分页：每页 page_size（默认100），返回 {total, page, page_size, rows:[{...,level}]}。
         """
         # 剥离标题中内嵌的 4 位年份（如 "casino.royale.1967"），避免年份被重复计入键
@@ -190,7 +190,7 @@ class TmdbCache:
             else:
                 r["level"] = "模糊"; fuzzy.append(r)
 
-        # 年份筛选
+        # 年份筛选（精确 year 优先；否则 year_max 范围）
         if year:
             same_title = [r for r in same_title if r.get("year") == year] + \
                          [r for r in same_title if r.get("year") != year]
@@ -201,29 +201,48 @@ class TmdbCache:
             c = country.strip()
             return (r.get("country", "").upper() == c.upper()) or \
                    (r.get("country_name", "") == c)
-        # 类型筛选（中文名 -> 需解析 raw_json 的 genres）
+        # 类型筛选（中文名或英文名均可 -> 需解析 raw_json 的 genres）
+        # Kaggle 导入时 genres 是 JSON 字符串，需二次解析
+        _zh_to_en = {v: k for k, v in GENRE_MAP.items()}
         def _match_genre(r):
             if not genre:
                 return True
             g = genre.strip()
+            g_en = _zh_to_en.get(g, g)  # 若传入是中文，转回英文比对；英文名直接用
             try:
                 raw = json.loads(r.get("raw_json") or "{}")
                 genres = raw.get("genres") or raw.get("genre_ids") or []
+                if isinstance(genres, str):
+                    try:
+                        genres = json.loads(genres)
+                    except Exception:
+                        genres = []
                 names = []
+                _en_to_zh = {v: k for k, v in GENRE_MAP.items()}
                 for x in genres:
                     if isinstance(x, dict):
-                        names.append(x.get("name", ""))
+                        nm = x.get("name", "")
+                        zh = GENRE_MAP.get(x.get("id")) if x.get("id") else _en_to_zh.get(nm)
+                        if zh:
+                            names.append(zh)
+                        if nm:
+                            names.append(nm)
                     elif isinstance(x, int):
                         names.append(GENRE_MAP.get(x, ""))
-                return g in names
+                return (g in names) or (g_en in names)
             except Exception:
                 return False
 
         merged = []
         for bucket in (exact, same_title, fuzzy):
             for r in bucket:
-                if _match_country(r) and _match_genre(r):
-                    merged.append(r)
+                if not _match_country(r):
+                    continue
+                if not _match_genre(r):
+                    continue
+                if year_max is not None and (r.get("year") or 0) > year_max:
+                    continue
+                merged.append(r)
         total = len(merged)
         start = (page - 1) * page_size
         page_rows = merged[start:start + page_size]
@@ -236,19 +255,35 @@ class TmdbCache:
         }
 
     def distinct_genres(self):
-        """汇总库里出现过的类型中文名（供筛选下拉用）。"""
+        """汇总库里出现过的类型（返回中文名，供筛选下拉用）。
+
+        Kaggle raw_json 的 genres[].name 是英文（如 "Action"），
+        用 GENRE_MAP 反查成中文（"动作"）。查不到中文的英文原名也保留。
+        """
         conn = self._get_conn()
         names = set()
         for (raw,) in conn.execute(
-                "SELECT raw_json FROM movies WHERE raw_json != '' LIMIT 20000").fetchall():
+                "SELECT raw_json FROM movies WHERE raw_json != '' LIMIT 50000").fetchall():
             try:
                 d = json.loads(raw)
-                for x in (d.get("genres") or []):
-                    if isinstance(x, dict) and x.get("name"):
-                        names.add(x["name"])
+                genres = d.get("genres") or []
+                if isinstance(genres, str):
+                    try:
+                        genres = json.loads(genres)
+                    except Exception:
+                        genres = []
+                for x in genres:
+                    if isinstance(x, dict) and (x.get("name") or x.get("id")):
+                        # 优先用 id 查中文（GENRE_MAP key 为 int id）
+                        zh = GENRE_MAP.get(x.get("id")) if x.get("id") else None
+                        if not zh and x.get("name"):
+                            # 退而用英文名反向查（GENRE_MAP 值是中文，建反查）
+                            _en_to_zh = {v: k for k, v in GENRE_MAP.items()}
+                            zh = _en_to_zh.get(x["name"])
+                        names.add(zh if zh else x.get("name"))
             except Exception:
                 continue
-        return sorted(names)
+        return sorted(names, key=lambda s: s)
 
     def apply_country_names(self, limit=None):
         """零成本补 country_name：用 COUNTRY_MAP 把 ISO 代码转中文（v23.54 新增）。
@@ -272,17 +307,39 @@ class TmdbCache:
 
     def strengthen_missing(self, api_key, interval=20, stop_check=None,
                            on_log=None, on_progress=None, batch_limit=0):
-        """自动强化（v23.54 新增）：用 TMDB 官方 API 批量补 title_zh + country_name。
+        """自动强化（v23.54 新增，v23.55 支持高速档+429退避）：TMDB API 批量补中文名。
 
-        - 拉取 title_zh 为空的记录（batch_limit>0 时限制条数，便于测试）
-        - 每条：search/movie 拿中文标题 + 详情补中文国名；限速 interval 秒/条
-        - stop_check 为 callable，返回 True 时中止；on_log/on_progress 回调
-        - 不依赖主界面扫描，工具自己强化自己数据
+        - interval 为「每条间隔秒数」，支持小数（0.02 ≈ 50条/秒）
+        - 遇 HTTP 429（限流）自动退避：等待 Retry-After 或 5 秒后重试，不中断
+        - stop_check 返回 True 时中止；on_log/on_progress 回调
         返回 (processed, updated)。
         """
         import requests
         import time
         conn = self._get_conn()
+
+        def _get(url, params, retries=3):
+            for attempt in range(retries):
+                try:
+                    resp = requests.get(url, params=params, timeout=15)
+                except Exception:
+                    time.sleep(2)
+                    continue
+                if resp.status_code == 429:
+                    # 限流：退避后重试
+                    wait = 5
+                    try:
+                        if resp.headers.get("Retry-After"):
+                            wait = int(resp.headers["Retry-After"])
+                    except Exception:
+                        pass
+                    if on_log:
+                        on_log(f"  ⏳ 429 限流，退避 {wait}s 后重试")
+                    time.sleep(wait)
+                    continue
+                return resp
+            return None
+
         sql = "SELECT id, title_en, year FROM movies WHERE title_zh = '' AND title_en != ''"
         if batch_limit:
             sql += f" LIMIT {int(batch_limit)}"
@@ -296,13 +353,16 @@ class TmdbCache:
                 break
             mid_title, myear, mid = r["title_en"], r["year"], r["id"]
             try:
-                # 1) 搜索拿到 tmdb_id + 中文标题（zh-CN 区域）
                 s_url = "https://api.themoviedb.org/3/search/movie"
                 params = {"api_key": api_key, "query": mid_title,
                           "language": "zh-CN", "include_adult": False}
                 if myear:
                     params["year"] = myear
-                resp = requests.get(s_url, params=params, timeout=15)
+                resp = _get(s_url, params)
+                if resp is None:
+                    processed += 1
+                    time.sleep(interval)
+                    continue
                 if resp.status_code != 200:
                     if on_log:
                         on_log(f"  ✗ [{mid_title}] API {resp.status_code}")
@@ -325,10 +385,9 @@ class TmdbCache:
                 # 2) 详情补国家（production_countries）
                 if tmdb_id:
                     d_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-                    dresp = requests.get(d_url,
-                                         params={"api_key": api_key,
-                                                 "language": "zh-CN"}, timeout=15)
-                    if dresp.status_code == 200:
+                    dresp = _get(d_url,
+                                 {"api_key": api_key, "language": "zh-CN"})
+                    if dresp is not None and dresp.status_code == 200:
                         dd = dresp.json()
                         pcs = dd.get("production_countries") or []
                         if pcs:

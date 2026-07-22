@@ -193,10 +193,11 @@ class BroadSearchWorker(QThread):
     result = pyqtSignal(dict)
     log = pyqtSignal(str)
 
-    def __init__(self, title, year, country, genre, page, page_size=100):
+    def __init__(self, title, year, year_max, country, genre, page, page_size=100):
         super().__init__()
         self.title = title
         self.year = year
+        self.year_max = year_max
         self.country = country
         self.genre = genre
         self.page = page
@@ -206,8 +207,8 @@ class BroadSearchWorker(QThread):
         from core.tmdb_cache import TmdbCache
         cache = TmdbCache()
         try:
-            res = cache.search_broad(self.title, self.year, self.country,
-                                     self.genre, self.page, self.page_size)
+            res = cache.search_broad(self.title, self.year, self.year_max,
+                                     self.country, self.genre, self.page, self.page_size)
             self.result.emit(res)
         except Exception as e:
             self.log.emit(f"搜索失败: {e}")
@@ -242,6 +243,26 @@ class StrengthenWorker(QThread):
             self.done.emit(processed, updated)
         except Exception as e:
             self.log.emit(f"强化异常: {e}")
+
+
+class ConvertCountryWorker(QThread):
+    """🌐 转中文国名（本地零成本，后台线程避免大库卡 UI）。"""
+    log = pyqtSignal(str)
+    done = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            self.log.emit("🌐 开始转中文国名（ISO→中文静态映射）...")
+            n = cache.apply_country_names()
+            self.log.emit(f"✅ 已补齐中文国名 {n:,} 条")
+            self.done.emit(n)
+        except Exception as e:
+            self.log.emit(f"转国名异常: {e}")
 
 
 class TmdbManager(QMainWindow):
@@ -341,9 +362,12 @@ class TmdbManager(QMainWindow):
         self.le_query = QLineEdit()
         self.le_query.setPlaceholderText("输入电影名，可含 . 分隔，如 casino.royale.1967")
         sf.addRow("关键词:", self.le_query)
-        self.le_year = QLineEdit()
-        self.le_year.setPlaceholderText("可选，如 1967")
-        sf.addRow("年份:", self.le_year)
+        # 年份下拉档位（X年以前 = year <= X）
+        self.cb_year = QComboBox()
+        self.cb_year.addItem("全部年份", 0)
+        for y in list(range(1910, 2011, 10)) + [2015, 2020, 2025, 2030]:
+            self.cb_year.addItem(f"{y}年以前", y)
+        sf.addRow("年份:", self.cb_year)
         self.cb_country = QLineEdit()
         self.cb_country.setPlaceholderText("可选，国家代码或中文名，如 US / 美国")
         sf.addRow("国家:", self.cb_country)
@@ -399,10 +423,17 @@ class TmdbManager(QMainWindow):
         self.btn_save_key.clicked.connect(self._save_apikey)
         xf.addRow(self.btn_save_key)
         self.cb_interval = QComboBox()
-        for s in [5, 10, 15, 20, 30]:
-            self.cb_interval.addItem(f"{s} 秒/条", s)
-        self.cb_interval.setCurrentIndex(3)  # 默认 20 秒
-        xf.addRow("爬取间隔:", self.cb_interval)
+        # (显示文本, 每条间隔秒数) —— 小数=高速档(条/秒)，整数=秒/条
+        _speeds = [
+            ("1秒 50 条", 0.02), ("1秒 30 条", 0.033), ("1秒 20 条", 0.05),
+            ("1秒 10 条", 0.1), ("1秒 1 条", 1.0),
+            ("5秒 1 条", 5.0), ("10秒 1 条", 10.0), ("15秒 1 条", 15.0),
+            ("20秒 1 条", 20.0), ("30秒 1 条", 30.0),
+        ]
+        for label, sec in _speeds:
+            self.cb_interval.addItem(label, sec)
+        self.cb_interval.setCurrentIndex(8)  # 默认 20秒/条
+        xf.addRow("爬取速度:", self.cb_interval)
         xl.addLayout(xf)
         hb_x = QHBoxLayout()
         self.btn_conv_country = QPushButton("🌐 转中文国名（本地零成本）")
@@ -451,6 +482,15 @@ class TmdbManager(QMainWindow):
 
     def _log(self, msg):
         self.log.append(msg)
+        # 独立日志文件（v23.55）：界面与文件双写，便于崩溃后排错
+        try:
+            _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
+            os.makedirs(os.path.dirname(_lp), exist_ok=True)
+            with open(_lp, "a", encoding="utf-8") as _f:
+                import datetime as _dt
+                _f.write(f"[{_dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+        except Exception:
+            pass
 
     def _refresh_stats(self):
         try:
@@ -512,13 +552,14 @@ class TmdbManager(QMainWindow):
         if not q:
             QMessageBox.warning(self, "提示", "请输入关键词")
             return
-        yr = self.le_year.text().strip()
-        year = int(yr) if yr.isdigit() else None
+        # 年份下拉：全部=0，否则为 year_max（X年以前）
+        ym = int(self.cb_year.currentData() or 0)
+        year_max = ym if ym else None
         country = self.cb_country.text().strip() or None
         genre = self.cb_genre.currentText()
         genre = genre if genre and genre != "（全部类型）" else None
         self._search_page = 1
-        self._run_search(q, year, country, genre)
+        self._run_search(q, None, year_max, country, genre)
 
     def _page(self, delta):
         if not self._search_last:
@@ -528,23 +569,24 @@ class TmdbManager(QMainWindow):
             return
         self._search_page = new
         r = self._search_last
-        self._run_search_from(r["_q"], r["_year"], r["_country"], r["_genre"])
+        self._run_search_from(r["_q"], r["_year"], r["_year_max"], r["_country"], r["_genre"])
 
-    def _run_search(self, q, year, country, genre):
-        self._search_q = (q, year, country, genre)
-        self._run_search_from(q, year, country, genre)
+    def _run_search(self, q, year, year_max, country, genre):
+        self._search_q = (q, year, year_max, country, genre)
+        self._run_search_from(q, year, year_max, country, genre)
 
-    def _run_search_from(self, q, year, country, genre):
+    def _run_search_from(self, q, year, year_max, country, genre):
         self.btn_search.setEnabled(False)
-        w = BroadSearchWorker(q, year, country, genre, self._search_page, 100)
-        w.result.connect(lambda res: self._show_search(res, q, year, country, genre))
+        w = BroadSearchWorker(q, year, year_max, country, genre, self._search_page, 100)
+        w.result.connect(lambda res: self._show_search(res, q, year, year_max, country, genre))
         w.log.connect(self._log)
         w.start()
 
-    def _show_search(self, res, q, year, country, genre):
+    def _show_search(self, res, q, year, year_max, country, genre):
         self.btn_search.setEnabled(True)
         self._search_last = dict(res)
-        self._search_last.update(_q=q, _year=year, _country=country, _genre=genre)
+        self._search_last.update(_q=q, _year=year, _year_max=year_max,
+                                  _country=country, _genre=genre)
         self.lbl_page.setText(f"第 {res['page']} / {res['pages']} 页（共 {res['total']} 条）")
         self.tbl_search.setRowCount(len(res["rows"]))
         for i, r in enumerate(res["rows"]):
@@ -567,18 +609,21 @@ class TmdbManager(QMainWindow):
         QMessageBox.information(self, "已保存", "TMDB API Key 已写入 config.json")
 
     def _convert_country(self):
-        from core.tmdb_cache import TmdbCache
-        cache = TmdbCache()
-        n = cache.apply_country_names()
-        self._log(f"🌐 已补齐中文国名 {n:,} 条（ISO→中文静态映射）")
-        self._refresh_stats()
+        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
+            QMessageBox.information(self, "提示", "转中文国名进行中，请稍候")
+            return
+        self.conv_worker = ConvertCountryWorker()
+        self.conv_worker.log.connect(self._log)
+        self.conv_worker.done.connect(lambda n: (self._refresh_stats(),
+                                                 self._log("📊 统计已刷新")))
+        self.conv_worker.start()
 
     def _start_strengthen(self):
         k = self.le_apikey.text().strip() or load_config().get("tmdb_api_key", "")
         if not k:
             QMessageBox.warning(self, "提示", "请先填写并保存 TMDB API Key")
             return
-        interval = int(self.cb_interval.currentData() or 20)
+        interval = float(self.cb_interval.currentData() or 20)
         # 开始前固定读取待补总数（分母固定，不再变动）
         from core.tmdb_cache import TmdbCache
         try:
@@ -644,7 +689,23 @@ class TmdbManager(QMainWindow):
         self.btn_stop_str.setEnabled(False)
 
 
+def _exc_hook(exc_type, exc_val, exc_tb):
+    # v23.55: 全局未捕获异常写入独立日志，避免"默默退出"无迹可寻
+    import traceback
+    try:
+        _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
+        os.makedirs(os.path.dirname(_lp), exist_ok=True)
+        with open(_lp, "a", encoding="utf-8") as _f:
+            import datetime as _dt
+            _f.write(f"[{_dt.datetime.now():%Y-%m-%d %H:%M:%S}] [UNCAUGHT] "
+                     f"{''.join(traceback.format_exception(exc_type, exc_val, exc_tb))}\n")
+    except Exception:
+        pass
+    sys.__excepthook__(exc_type, exc_val, exc_tb)
+
+
 def main():
+    sys.excepthook = _exc_hook
     # v23.53: 全局异常捕获，崩溃时写日志方便排查
     try:
         app = QApplication(sys.argv)
