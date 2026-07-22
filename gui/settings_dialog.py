@@ -39,7 +39,7 @@ class SettingsDialog(QDialog):
         self.cfg = cfg
         self.setWindowTitle("设置")
         # v23.47：1800×970，预留足够空间给右侧赞赏区
-        self.resize(1800, 970)
+        self.resize(1800, 1260)
         # v23.46: 去掉「?」按钮（未关联帮助文件）
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self._build()
@@ -248,25 +248,15 @@ class SettingsDialog(QDialog):
         f6.addLayout(act_row)
 
         # 凭据输入（默认禁用，激活后启用）
-        f6_form = QFormLayout()
-        self.le_appid = QLineEdit()
-        self.le_appid.setPlaceholderText("公众号后台 → 开发 → 基本配置")
-        self.le_appsecret = QLineEdit()
-        self.le_appsecret.setEchoMode(QLineEdit.Password)
-        self.le_appsecret.setPlaceholderText("同上 AppSecret 字段")
-        self.le_openid = QLineEdit()
-        self.le_openid.setPlaceholderText("留空可点右侧自动获取")
-        self.b_fetch_openid = QPushButton("自动获取")
-        self.b_fetch_openid.clicked.connect(self._on_fetch_openid)
-        openid_row = QHBoxLayout()
-        openid_row.addWidget(self.le_openid, 1)
-        openid_row.addWidget(self.b_fetch_openid)
-        f6_form.addRow("AppID:", self.le_appid)
-        f6_form.addRow("AppSecret:", self.le_appsecret)
-        f6_form.addRow("OpenID:", openid_row)
-        # 凭据容器（用于启用/禁用切换）
         self.creds_widget = QWidget()
-        self.creds_widget.setLayout(f6_form)
+        f6_form = QFormLayout(self.creds_widget)
+        self.le_serverchan = QLineEdit()
+        self.le_serverchan.setPlaceholderText("sctpxxxxx 或 SCUxxxxx")
+        self.le_serverchan.setEchoMode(QLineEdit.Password)
+        f6_form.addRow("ServerChan SendKey:", self.le_serverchan)
+        tip_sc = QLabel("注册 sct.ftqq.com → 关注公众号 → 复制 SendKey → 填入即可")
+        tip_sc.setStyleSheet("color:#888; font-size:9pt; padding-left:20px;")
+        f6_form.addRow(tip_sc)
         self.creds_widget.setEnabled(False)
         f6.addWidget(self.creds_widget)
         root.addWidget(g6)
@@ -501,9 +491,7 @@ class SettingsDialog(QDialog):
 
         # v23.33: 微信推送
         self.bx_wechat_push.setChecked(c.get("wechat_push_enabled", False))
-        self.le_appid.setText(c.get("wechat_appid", ""))
-        self.le_appsecret.setText(c.get("wechat_appsecret", ""))
-        self.le_openid.setText(c.get("wechat_openid", ""))
+        self.le_serverchan.setText(c.get("serverchan_key", ""))
         if c.get("wechat_activated", False):
             self.creds_widget.setEnabled(True)
             self.b_activate.setText("已激活")
@@ -555,9 +543,7 @@ class SettingsDialog(QDialog):
             c["prefetch_ahead"] = int(self.cb_prefetch.currentText())
             # v23.33: 微信推送
             c["wechat_push_enabled"] = self.bx_wechat_push.isChecked()
-            c["wechat_appid"] = self.le_appid.text().strip()
-            c["wechat_appsecret"] = self.le_appsecret.text().strip()
-            c["wechat_openid"] = self.le_openid.text().strip()
+            c["serverchan_key"] = self.le_serverchan.text().strip()
             c["wechat_activated"] = self.creds_widget.isEnabled()
             # 持久化
             config_mod.save(c)
@@ -605,11 +591,10 @@ class SettingsDialog(QDialog):
         self.le_activation.setReadOnly(True)
         QMessageBox.information(
             self, "激活成功",
-            "微信推送已解锁。\n\n"
-            "请填写你自己的公众号凭据：\n"
-            "· AppID / AppSecret：公众号后台 → 开发 → 基本配置\n"
-            "· OpenID：用户管理 → 关注者列表（你自己的 OpenID）\n\n"
-            "提示：需订阅号（个人可用），48h 内需与公众号有互动")
+            "推送已解锁。\n\n"
+            "请填写 ServerChan SendKey：\n"
+            "注册 sct.ftqq.com → 关注公众号 → 复制 SendKey\n\n"
+            "提示：无需服务器、无需 IP 白名单，纯 HTTPS")
 
     # v23.35: 自动获取 OpenID（通过微信 API 查粉丝列表）
     def _on_fetch_openid(self):

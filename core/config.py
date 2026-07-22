@@ -23,7 +23,7 @@ import shutil
 
 
 # 应用版本号：每次迭代 +1（同步修改此处和 README 即可）
-APP_VERSION = "v23.50"
+APP_VERSION = "v23.51"
 
 
 DEFAULTS = {
@@ -86,11 +86,9 @@ DEFAULTS = {
     "keep_ocr_frames": False,    # v23.21: 保留OCR帧/WAV文件供排查（不清tmp/N/temp/）
     "prefetch_ahead": 2,         # v23.42: 预缓存提前几个任务（默认 2，最大 20）
 
-    # —— 微信推送（v23.33）——
-    "wechat_push_enabled": False,  # 是否启用微信推送
-    "wechat_appid": "",            # 公众号 AppID
-    "wechat_appsecret": "",        # 公众号 AppSecret
-    "wechat_openid": "",            # 接收者的 OpenID
+    # —— 任务完成推送（v23.33 → v23.51: ServerChan）——
+    "wechat_push_enabled": False,  # 是否启用推送
+    "serverchan_key": "",          # ServerChan SendKey
     "wechat_activated": False,     # 是否已通过激活码校验
 
     # —— 源 ——

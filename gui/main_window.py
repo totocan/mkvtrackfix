@@ -1261,60 +1261,39 @@ class MainWindow(QMainWindow):
         # 1.5 秒后恢复待机（让 tray 有时间展示对勾）
         QTimer.singleShot(1500, lambda: _ipc_send_state("idle"))
 
-        # v23.33: 微信推送（任务完成时通知）
+        # v23.33/v23.51: 任务完成推送（ServerChan）
         if self.cfg.get("wechat_push_enabled", False):
-            self._push_wechat_notify(task_count, duration, src_gb, dst_gb,
-                                     saved if src_gb > 0 else 0)
+            self._push_task_notify(task_count, duration, src_gb, dst_gb,
+                                   saved if src_gb > 0 else 0)
 
-    # v23.33: 微信推送（客服消息，需用户先关注公众号）
-    def _push_wechat_notify(self, task_count, duration, src_gb, dst_gb, saved_gb):
-        """任务完成后调用微信客服消息接口推送通知。"""
+    # v23.51: 改用 ServerChan 推送（简单、无需 IP 白名单）
+    def _push_task_notify(self, task_count, duration, src_gb, dst_gb, saved_gb):
+        """ServerChan 推送任务完成通知。"""
         import requests
-        appid = self.cfg.get("wechat_appid", "").strip()
-        secret = self.cfg.get("wechat_appsecret", "").strip()
-        openid = self.cfg.get("wechat_openid", "").strip()
-        if not (appid and secret and openid):
-            self.log.log("微信推送未配置完整 (AppID/AppSecret/OpenID)，已跳过", "warn")
+        sendkey = self.cfg.get("serverchan_key", "").strip()
+        if not sendkey:
+            self.log.log("ServerChan 推送未配置 SendKey，已跳过", "warn")
             return
+        text = (
+            f"mkvtrackfix 任务完成\n"
+            f"任务数: {task_count} 个\n"
+            f"耗时: {duration or '—'}\n"
+        )
+        if saved_gb >= 1:
+            text += f"节省: {saved_gb:.2f}GB\n"
         try:
-            # 1) 拿 access_token
-            tok_resp = requests.get(
-                "https://api.weixin.qq.com/cgi-bin/token",
-                params={"grant_type": "client_credential",
-                        "appid": appid, "secret": secret},
-                timeout=10)
-            tok_data = tok_resp.json()
-            access_token = tok_data.get("access_token")
-            if not access_token:
-                err = tok_data.get("errcode", "?")
-                msg = tok_data.get("errmsg", "未知错误")
-                self.log.log(f"微信推送获取 token 失败 [{err}] {msg}", "warn")
-                return
-            # 2) 发客服消息（48h 窗口内有效）
-            text = (
-                f"🎬 mkvtrackfix 任务完成！\n"
-                f"\n"
-                f"· 任务数: {task_count} 个\n"
-                f"· 耗时:   {duration or '—'}\n"
-            )
-            if saved_gb >= 1:
-                text += f"· 节省:   {saved_gb:.2f}GB 空间 💾\n"
-            text += "\n—— 野生实验室 mkvtrackfix"
             resp = requests.post(
-                f"https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token={access_token}",
-                json={
-                    "touser": openid,
-                    "msgtype": "text",
-                    "text": {"content": text},
-                },
+                f"https://sctapi.ftqq.com/{sendkey}.send",
+                data={"title": "mkvtrackfix 任务完成",
+                      "desp": text},
                 timeout=10)
             data = resp.json()
-            if data.get("errcode") == 0:
-                self.log.log("微信推送已发送 ✓", "ok")
+            if data.get("code") == 0:
+                self.log.log("ServerChan 推送已发送 ✓", "ok")
             else:
-                self.log.log(f"微信推送失败 [{data.get('errcode')}] {data.get('errmsg')}", "warn")
+                self.log.log(f"ServerChan 推送失败 [{data.get('code')}] {data.get('message')}", "warn")
         except Exception as e:
-            self.log.log(f"微信推送异常: {e}", "warn")
+            self.log.log(f"ServerChan 推送异常: {e}", "warn")
 
     # --------------------------- 行删除（v23.16） ---------------------------
     def _on_table_context_menu(self, pos):
