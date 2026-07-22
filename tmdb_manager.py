@@ -528,7 +528,8 @@ class TmdbManager(QMainWindow):
             return
         self.worker = ImportWorker(path)
         self.worker.log.connect(self._log)
-        self.worker.progress.connect(lambda c, t: self.progress_bar.setValue(c % 100))
+        self.worker.progress.connect(
+            lambda c, t: self.progress_bar.setValue(int(c * 100 / t)) if t else None)
         self.worker.finished.connect(lambda n: QMessageBox.information(
             self, "导入完成", f"成功导入 {n:,} 条记录"))
         self.worker.finished.connect(self._refresh_stats)

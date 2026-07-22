@@ -477,15 +477,26 @@ class TmdbCache:
     
     def import_kaggle_csv(self, csv_path, callback=None):
         """导入 Kaggle CSV 数据集（批量入库）。
-        
+
         CSV 需包含: id, title, release_date, original_language,
         production_countries(JSON), original_title 等列。
-        callback(row_count, total) 可选，用于显示进度。
+        callback(row_count, total) 用于显示进度（total 为真实总行数）。
+        v23.55 修复：field_size_limit 防超长字段卡死；坏行跳过不中断。
         """
         import csv
+        import sys as _sys
+        csv.field_size_limit(min(getattr(_sys, "maxsize", 2**31 - 1), 2**31 - 1))
         conn = self._get_conn()
+        # 先数总行数（用于真实百分比进度）
+        _total_lines = 0
+        try:
+            with open(csv_path, 'r', encoding='utf-8', errors='replace') as _fc:
+                _total_lines = sum(1 for _ in _fc) - 1  # 去掉表头
+        except Exception:
+            _total_lines = 0
         total = 0
-        with open(csv_path, 'r', encoding='utf-8') as f:
+        skipped = 0
+        with open(csv_path, 'r', encoding='utf-8', errors='replace') as f:
             reader = csv.DictReader(f)
             rows = []
             for row in reader:
@@ -493,14 +504,15 @@ class TmdbCache:
                 try:
                     year = None
                     if row.get("release_date"):
-                        year = int(row["release_date"][:4])
-                    title_en = row.get("title", "") or row.get("original_title", "")
+                        year = int(str(row["release_date"])[:4])
+                    title_en = (row.get("title") or "").strip() or \
+                               (row.get("original_title") or "").strip()
                     if not title_en:
+                        skipped += 1
                         continue
                     key = self._normalize_key(title_en, year)
-                    # 提取国家
                     country = ""
-                    countries = row.get("production_countries", "[]")
+                    countries = row.get("production_countries", "[]") or "[]"
                     try:
                         clist = json.loads(countries)
                         if clist:
@@ -514,7 +526,8 @@ class TmdbCache:
                         "kaggle", datetime.datetime.now().isoformat()
                     ))
                 except Exception:
-                    pass
+                    skipped += 1
+                    continue
                 if len(rows) >= 500:
                     conn.executemany("""
                         INSERT OR IGNORE INTO movies
@@ -526,7 +539,7 @@ class TmdbCache:
                     conn.commit()
                     rows = []
                     if callback:
-                        callback(total, 0)
+                        callback(total, _total_lines)
             if rows:
                 conn.executemany("""
                     INSERT OR IGNORE INTO movies
@@ -536,6 +549,8 @@ class TmdbCache:
                     VALUES (?,?,?,?,?,?,?,?,?,?,?)
                 """, rows)
                 conn.commit()
+        if callback:
+            callback(total, _total_lines)
         return total
     
     def stats(self):
