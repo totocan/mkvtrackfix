@@ -418,6 +418,9 @@ class TmdbManager(QMainWindow):
         xl.addLayout(hb_x)
         self.pb_str = QProgressBar()
         xl.addWidget(self.pb_str)
+        self.lbl_task = QLabel("任务进度: 0 / 0（未开始）")
+        self.lbl_task.setFont(self._mono_font)
+        xl.addWidget(self.lbl_task)
         self.lbl_elapsed = QLabel("已运行时间: 0s（未开始）")
         self.lbl_elapsed.setFont(self._mono_font)
         xl.addWidget(self.lbl_elapsed)
@@ -428,9 +431,14 @@ class TmdbManager(QMainWindow):
         # 强化计时器（每秒刷新已运行时间）
         from PyQt5.QtCore import QTimer
         self._str_start_ts = 0
+        self._str_total = 0
         self._str_timer = QTimer()
         self._str_timer.setInterval(1000)
         self._str_timer.timeout.connect(self._tick_elapsed)
+        # 任务进度刷新定时器（每 10 秒）
+        self._task_timer = QTimer()
+        self._task_timer.setInterval(10000)
+        self._task_timer.timeout.connect(self._tick_task)
 
         # ===== 日志 =====
         self.log = QTextEdit()
@@ -571,24 +579,41 @@ class TmdbManager(QMainWindow):
             QMessageBox.warning(self, "提示", "请先填写并保存 TMDB API Key")
             return
         interval = int(self.cb_interval.currentData() or 20)
+        # 开始前固定读取待补总数（分母固定，不再变动）
+        from core.tmdb_cache import TmdbCache
+        try:
+            self._str_total = TmdbCache()._get_conn().execute(
+                "SELECT COUNT(*) FROM movies WHERE title_zh = '' AND title_en != ''"
+            ).fetchone()[0]
+        except Exception:
+            self._str_total = 0
+        self.lbl_task.setText(f"任务进度: 0 / {self._str_total:,}")
+        self.pb_str.setValue(0)
         self.str_worker = StrengthenWorker(k, interval)
         self.str_worker.log.connect(self._log)
         self.str_worker.progress.connect(
-            lambda p, t, u: (self.pb_str.setValue(int(p * 100 / t)) if t else None,
-                             self._log(f"进度 {p}/{t} 已更新 {u}")))
+            lambda p, t, u: (setattr(self, "_str_done", p),
+                             self.pb_str.setValue(int(p * 100 / self._str_total)) if self._str_total else None))
         self.str_worker.done.connect(lambda p, u: (
             self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条，用时 {self._fmt_elapsed()}"),
-            self.pb_str.setValue(100), self._refresh_stats(),
-            self._str_timer.stop(), self.btn_strengthen.setEnabled(True),
-            self.btn_stop_str.setEnabled(False)))
+            self.pb_str.setValue(100),
+            self.lbl_task.setText(f"任务进度: {p:,} / {self._str_total:,}（已完成）"),
+            self._refresh_stats(), self._str_timer.stop(), self._task_timer.stop(),
+            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False)))
         self.str_worker.start()
         self.btn_strengthen.setEnabled(False)
         self.btn_stop_str.setEnabled(True)
-        # 启动计时
+        # 启动计时 + 任务进度刷新
         import time as _t
         self._str_start_ts = _t.time()
+        self._str_done = 0
         self.lbl_elapsed.setText("已运行时间: 0s")
         self._str_timer.start()
+        self._task_timer.start()
+
+    def _tick_task(self):
+        done = getattr(self, "_str_done", 0)
+        self.lbl_task.setText(f"任务进度: {done:,} / {self._str_total:,}")
 
     def _tick_elapsed(self):
         import time as _t
@@ -611,7 +636,10 @@ class TmdbManager(QMainWindow):
             self.str_worker.stop()
             self._log("⏹ 已发送停止信号，等待当前请求完成后中止...")
             self._log(f"已运行时间: {self._fmt_elapsed()}")
+            done = getattr(self, "_str_done", 0)
+            self._log(f"任务进度: {done:,} / {self._str_total:,}")
         self._str_timer.stop()
+        self._task_timer.stop()
         self.btn_strengthen.setEnabled(True)
         self.btn_stop_str.setEnabled(False)
 
