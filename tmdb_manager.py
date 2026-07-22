@@ -418,10 +418,19 @@ class TmdbManager(QMainWindow):
         xl.addLayout(hb_x)
         self.pb_str = QProgressBar()
         xl.addWidget(self.pb_str)
+        self.lbl_elapsed = QLabel("已运行时间: 0s（未开始）")
+        self.lbl_elapsed.setFont(self._mono_font)
+        xl.addWidget(self.lbl_elapsed)
         xl.addWidget(QLabel("说明：强化只补 title_zh / country_name，不依赖主界面扫描，"
                             "可挂机后台运行。"))
         xl.addStretch()
         tabs.addTab(tab_str, "🕷 自动强化")
+        # 强化计时器（每秒刷新已运行时间）
+        from PyQt5.QtCore import QTimer
+        self._str_start_ts = 0
+        self._str_timer = QTimer()
+        self._str_timer.setInterval(1000)
+        self._str_timer.timeout.connect(self._tick_elapsed)
 
         # ===== 日志 =====
         self.log = QTextEdit()
@@ -568,17 +577,41 @@ class TmdbManager(QMainWindow):
             lambda p, t, u: (self.pb_str.setValue(int(p * 100 / t)) if t else None,
                              self._log(f"进度 {p}/{t} 已更新 {u}")))
         self.str_worker.done.connect(lambda p, u: (
-            self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条"),
+            self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条，用时 {self._fmt_elapsed()}"),
             self.pb_str.setValue(100), self._refresh_stats(),
-            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False)))
+            self._str_timer.stop(), self.btn_strengthen.setEnabled(True),
+            self.btn_stop_str.setEnabled(False)))
         self.str_worker.start()
         self.btn_strengthen.setEnabled(False)
         self.btn_stop_str.setEnabled(True)
+        # 启动计时
+        import time as _t
+        self._str_start_ts = _t.time()
+        self.lbl_elapsed.setText("已运行时间: 0s")
+        self._str_timer.start()
+
+    def _tick_elapsed(self):
+        import time as _t
+        if self._str_start_ts:
+            self.lbl_elapsed.setText(f"已运行时间: {self._fmt_elapsed()}")
+
+    def _fmt_elapsed(self):
+        import time as _t
+        sec = int(_t.time() - (self._str_start_ts or _t.time()))
+        h, rem = divmod(sec, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}h{m}m{s}s"
+        if m:
+            return f"{m}m{s}s"
+        return f"{s}s"
 
     def _stop_strengthen(self):
         if self.str_worker:
             self.str_worker.stop()
             self._log("⏹ 已发送停止信号，等待当前请求完成后中止...")
+            self._log(f"已运行时间: {self._fmt_elapsed()}")
+        self._str_timer.stop()
         self.btn_strengthen.setEnabled(True)
         self.btn_stop_str.setEnabled(False)
 
