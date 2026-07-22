@@ -21,7 +21,7 @@ import os
 import re
 import time
 
-from . import logger
+from . import logger, lang
 
 # TMDB 搜索页（无需 API key）
 _TMDB_SEARCH_URL = "https://www.themoviedb.org/search"
@@ -354,7 +354,8 @@ def classify_movie(path, config):
         if cached and cached.get("tmdb_id"):
             result["is_domestic"] = (cached["country"] in _DOMESTIC_COUNTRIES)
             result["native_lang"] = cached.get("language", "und") or "und"
-            result["native_lang_name"] = _LANG_NAMES.get(result["native_lang"], "未知")
+            result["native_lang_name"] = lang.lang_info_by_iso(
+                result["native_lang"]).get("zh", "未知")
             result["source"] = "tmdb_cache"
             result["country"] = cached.get("country", "")
             result["country_name"] = cached.get("country_name", "")

@@ -47,7 +47,6 @@ def build_command(tracks, src, out, config):
     cmd = [exe, "-o", out]
 
     kept_audio = []
-    kept_sub = []
     for t in tracks:
         if t.action != "keep":
             continue
@@ -81,8 +80,6 @@ def build_command(tracks, src, out, config):
             cmd += [f"--track-name", f"{tid}:{name}"]
         if t.track_type == "audio":
             kept_audio.append(str(tid))
-        elif t.track_type == "subtitle":
-            kept_sub.append(str(tid))
 
     # ---- 默认轨道标记 ----
     # 音轨：cmn > yue > eng > 其他（选一条默认）
@@ -128,7 +125,7 @@ def build_command(tracks, src, out, config):
             cmd += [f"--default-track", f"{tid}:{flag}"]
         cmd += ["--subtitle-tracks", ",".join(int_sub_ids)]
 
-    # v23.54: 外挂字幕附加到主输入文件之后
+    # v23.54: 外挂字幕附加到主输入文件之后（独立文件，不占用主文件 track id）
     for et in ext_subs:
         ext_path = getattr(et, "external_path", None)
         if ext_path:
@@ -140,9 +137,10 @@ def build_command(tracks, src, out, config):
         cmd += ["--audio-tracks", ",".join(kept_audio)]
     else:
         cmd += ["--no-audio"]
-    if kept_sub:
-        cmd += ["--subtitle-tracks", ",".join(kept_sub)]
-    else:
+    # 注意：内部字幕已由上面 --subtitle-tracks（int_sub_ids）处理，
+    # 这里仅在「既无内部字幕也无外挂字幕」时才加 --no-subtitles，
+    # 否则会覆盖前面的内部字幕选择，且误把外挂字幕 id 当成主文件 track id。
+    if not int_sub_ids and not ext_subs:
         cmd += ["--no-subtitles"]
 
     cmd += [src]
@@ -172,14 +170,16 @@ def _lang_match(expected, got_lang, got_ietf):
         exp_mkv = exp
         exp_ietf = exp
     # v22: 通用 ISO 639-1/2 归一化（如 fr ↔ fra 视为匹配）
-    if exp_mkv == (got_lang or "").lower():
+    got_lang_lower = (got_lang or "").lower()
+    got_ietf_lower = (got_ietf or "").lower()
+    if exp_mkv == got_lang_lower:
         return True
-    if exp_ietf == (got_ietf or "").lower():
+    if exp_ietf == got_ietf_lower:
         return True
     try:
         from core import lang_map
         exp_norm = lang_map.lang_info(exp_mkv).get("iso", exp_mkv)
-        got_norm = lang_map.lang_info((got_lang or "").lower()).get("iso", (got_lang or "").lower())
+        got_norm = lang_map.lang_info(got_lang_lower).get("iso", got_lang_lower)
         if exp_norm == got_norm:
             return True
     except Exception:

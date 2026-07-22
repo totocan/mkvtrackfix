@@ -1,75 +1,6 @@
-<div align="center">
-
-# 🎬 mkvtrackfix
-
-### 电影音轨 / 字幕标签批量修复工具
-
-**v23 · Active Development · Powered by Faster-Whisper + RapidOCR-OpenVINO + MKVToolNix**
-
-<br>
-
-<!-- 主品牌徽章 -->
-<a href="../../releases"><img src="assets/badges/version.svg" alt="Version v23"/></a>
-<a href="LICENSE"><img src="assets/badges/license.svg" alt="License GPL-3.0"/></a>
-<img src="assets/badges/semver.svg" alt="SemVer 2.0.0"/>
-<img src="assets/badges/status.svg" alt="Status stable"/>
-<img src="assets/badges/codestyle.svg" alt="Code style black"/>
-
-<br>
-
-<!-- AI / ML 引擎（开源关联，可点击） -->
-<a href="https://github.com/SYSTRAN/faster-whisper"><img src="assets/badges/whisper.svg" alt="faster-whisper (CTranslate2)" title="faster-whisper"/></a>
-<a href="https://github.com/RapidAI/RapidOCR"><img src="assets/badges/rapidocr.svg" alt="RapidOCR (OpenVINO)" title="RapidOCR"/></a>
-<a href="https://www.modelscope.cn/models/gpustack/faster-whisper-medium"><img src="assets/badges/modelscope.svg" alt="ModelScope 魔搭" title="ModelScope"/></a>
-<a href="https://huggingface.co/Systran/faster-whisper-medium"><img src="assets/badges/huggingface.svg" alt="HuggingFace Hub" title="HuggingFace"/></a>
-
-<br>
-
-<!-- 原生工具链（可点击主页） -->
-<a href="https://ffmpeg.org/"><img src="assets/badges/ffmpeg.svg" alt="ffmpeg" title="FFmpeg"/></a>
-<a href="https://mkvtoolnix.download/"><img src="assets/badges/mkvtoolnix.svg" alt="MKVToolNix" title="MKVToolNix"/></a>
-<a href="https://www.riverbankcomputing.com/software/pyqt/"><img src="assets/badges/pyqt5.svg" alt="PyQt5" title="PyQt5"/></a>
-<a href="https://www.themoviedb.org/"><img src="assets/badges/tmdb.svg" alt="TMDB" title="TMDB"/></a>
-<a href="https://github.com/giampaolo/psutil"><img src="assets/badges/psutil.svg" alt="psutil" title="psutil"/></a>
-
-<br>
-
-<!-- 运行环境 -->
-<a href="https://www.python.org/"><img src="assets/badges/python.svg" alt="Python"/></a>
-<img src="assets/badges/windows.svg" alt="Windows"/>
-<img src="assets/badges/nas.svg" alt="NAS Support"/>
-<a href="https://pypi.org/"><img src="assets/badges/pypi.svg" alt="PyPI"/></a>
-
-<br>
-
-[📥 下载便携版](../../releases) · [📝 更新日志](CHANGES.md) · [🐛 反馈问题](../../issues) · [📖 补充手册](READMEPLUS.md) · [📖 架构手册](ARCHITECTURE.md) · [⭐ Star](../../stargazers)
-
-</div>
-
----
-# 电影音轨 / 字幕标签批量修复工具（v23.16） mkvtrackfix
+# 电影音轨 / 字幕标签批量修复工具（v23） mkvtrackfix
 - 批量修复 mp4 / mkv 电影的音轨与字幕语言标签，并把 mp4 重新封装为 mkv。
 - 支持 UNC 网络路径（NAS），带 GUI、AI 识别、非破坏式输出与干跑预览。
-
----
-
-## 项目说明
-
-我们在使用 NAS 囤积电影的核心问题是什么？资源来自五湖四海，必然混乱。
-
-![轨道混乱 vs AI 修复](assets/screenshot/14-track-chaos-vs-ai-fix.jpg)
-
-除了音轨、字幕轨道超级多以外，标签的规范化是乱的，尤其是大量 `und` 标签。所以 mkvtrackfix 的核心就是**借助 AI 模型真正识别音轨语言、字幕语言，然后重新修订**；当然太多的音轨、字幕轨道我们也能顺带剔除——很多 30GB 的视频剔除不必要的字幕和音轨后，体积可减小到 24GB。实际我们只需要保留主要的字幕（如简中英双语），以及质量更好的普通话 / 英语音轨即可。
-
-![媒体信息对比](assets/screenshot/15-media-info-compare.jpg)
-
-同时健全标签命名和名称，在不同的播放器都一目了然。
-
-![文件命名对比](assets/screenshot/16-naming-compare.jpg)
-
-这些都解决了，最后我们**优化视频文件的命名**：简洁、直观，解决字符串冲突。因为很多朋友是从 Windows 把数据扔到 NAS（Linux），很可能 NAS 没处理好就看不到文件了——所以咱们这个工具就干这事。
-
-> 源码约 200KB（实际含注释约 290KB），支持库约 1.7GB 压缩包（可选 Patch 合并离线直接使用）。
 
 ---
 
@@ -93,16 +24,6 @@
 
 ## 主要变更
 
-### ✏️ v23.16 — 记录编辑器：删除行 + 断点续传
-- **表格右键「删除选中行」**：扫描后发现个别文件不行、或想剔除某条，右键直接删，自动同步清理内部状态。处理进行中自动禁用删除（提示先停止），避免错位。
-- **断点续传**：「保存记录」现在额外记录每行的处理状态与「已完成」标记；重新「导入记录」后，已完成的行**自动标绿**，再次「开始处理」时 Worker **自动跳过**它们，只跑剩余任务。无需手动删已完成行，也不会重复处理。
-- 完整闭环：扫描 → 右键删掉不行的 → 开始处理 → 中途失败「停止」→ 保存记录 → 重开导入 → 只处理剩下的。老版本（v1）记录兼容导入。
-
-### 🐛 v23.15 — 调试模式磁盘打满修复（重要）
-- **问题**：开启「调试模式」批量处理（如 73 个任务）会写满 C 盘（`[Errno 28] No space left on device`）。
-- **根因**：调试模式本意是保留当前任务中间产物供排查，但旧实现写成了**所有任务产物永久保留、跨任务不清理**——音频 WAV、PGS 字幕 OCR 帧、UNC 整片副本全部堆积在 `tmp/temp/`。
-- **修复（滑动窗口清理）**：成功/跳过任务立即清理；失败 + 调试仅保留最近一个失败任务的快照（`tmp/debug_last/`）；启动/收尾/关闭额外清理。磁盘占用从此**有硬上限**，不再随任务数线性增长，调试排查能力保留。
-
 ### v23 正式版
 - **托盘图标动画**：墨镜（待机）→ 放大镜（扫描）→ 齿轮（处理）→ 绿色对勾（完成）+ 提示音
 - **提取+检测分离**：音轨一次性批量提取三段 WAV（仅一次 NAS），再统一 AI 检测
@@ -124,23 +45,9 @@
 
 ## 使用流程
 
-### 基础三步
 1. 填写源路径（支持 UNC 网络路径），点「收集文件」
 2. 点「扫描并预览」→ 查看每条轨道的识别结果和计划动作
 3. 确认无误后点「开始处理」→ mkvmerge 转封装输出 `.fixed.mkv`
-
-### ✏️ 记录编辑：删掉不行的
-扫描后发现个别文件识别失败、或不想处理某几条？**在表格上右键 → 「删除选中行」**即可剔除，剩余任务照常处理——不必整批重来。
-
-### 🔁 断点续传：处理到一半也能接着跑
-大批量处理中途失败/想暂停？无需从头再来：
-
-1. 处理中遇问题，点「停止当前」让当前任务收尾；
-2. 点「保存记录」——记录里已自动标记哪些文件**处理成功（已完成）**；
-3. 关掉程序或修好环境后，点「导入记录」——已完成的行会**自动标绿**；
-4. 再点「开始处理」——Worker 会**自动跳过已完成**的文件，只处理剩下的。
-
-> 即便你手动右键删掉了已完成行再保存，行为也完全一致。断点续传的正确性依赖于「已完成的物理输出已落在 NAS 上」，非破坏式输出（`.fixed.mkv` / 重命名）不会因重跑而覆盖已有成果。
 
 ---
 

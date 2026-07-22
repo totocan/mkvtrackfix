@@ -234,6 +234,12 @@ def apply_subtitle_policy(tracks, config):
     for t in subs:
         kind = getattr(t, "detected_kind", None) or "unknown"
 
+        # v23.54: 外挂字幕（external_path 有值）默认保留，不参与内置字幕去重/移除策略
+        if getattr(t, "external_path", None):
+            t.action = "keep"
+            t.note = "外挂字幕，默认保留"
+            continue
+
         if kind == "chinese_simplified":
             # 已有简中英双语时，独立简体中文属于冗余，按策略移除
             if remove_redundant_simplified and has_bilingual:

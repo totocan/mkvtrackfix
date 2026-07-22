@@ -30,6 +30,7 @@ class Track:
     profile: Optional[str] = None
     title: Optional[str] = None  # 原始轨道名
     height: Optional[int] = None  # v22: 视频高度（用于分辨率标签）
+    width: Optional[int] = None   # v23.54: 视频宽度（分辨率判定宽度优先，避免 1038 误降）
     # 检测/策略结果（由后续阶段填充）
     detected_iso: Optional[str] = None       # 识别出的规范语言码
     detected_name: Optional[str] = None      # 识别出的显示名
@@ -78,6 +79,8 @@ def _tracks_from_ffprobe(streams):
             channel_layout=st.get("channel_layout"),
             profile=st.get("profile"),
             title=tags.get("title"),
+            width=st.get("width"),
+            height=st.get("height") if ctype == "video" else None,
         ))
     return tracks
 
@@ -100,6 +103,7 @@ def _tracks_from_mkvmerge(mkv_tracks):
             profile=None,
             title=mt.get("title"),
             height=mt.get("height") if rtype == "video" else None,
+            width=mt.get("width") if rtype == "video" else None,
         ))
     return tracks
 

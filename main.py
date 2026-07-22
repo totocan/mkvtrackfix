@@ -38,8 +38,9 @@ sys.path.insert(0, _HERE)
 os.chdir(_APP_ROOT)
 import tempfile
 
-# 全局临时目录（供 tempfile.gettempdir() 等使用）
+# 所有临时文件放到项目 tmp/temp/ 下（统一管理，方便清理）
 _TEMP_DIR = os.path.join(_APP_ROOT, "tmp", "temp")
+os.makedirs(_TEMP_DIR, exist_ok=True)
 tempfile.tempdir = _TEMP_DIR
 
 # ---------------------------------------------------------------------------

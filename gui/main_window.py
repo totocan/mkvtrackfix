@@ -35,7 +35,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import QThread, pyqtSignal, QUrl, Qt, QTimer, QTranslator, QLocale, QLibraryInfo
 from PyQt5.QtGui import QFont, QColor, QIcon, QDragEnterEvent, QDropEvent, QDesktopServices
 
-from core import pipeline, probe, config as config_mod, utils
+from core import pipeline, probe, config as config_mod, utils, codec
 from gui.widgets import LogWidget, fmt_plan
 from gui.sys_widget import SysMonitorWidget
 from gui import settings_dialog
@@ -955,12 +955,10 @@ class MainWindow(QMainWindow):
                 for t in tracks:
                     if t.track_type == "video":
                         codec = (t.codec or "").upper()
+                        w = getattr(t, "width", 0) or 0
                         h = getattr(t, "height", 0) or 0
-                        if h >= 2160:    res = "2160p"
-                        elif h >= 1080:  res = "1080p"
-                        elif h >= 720:   res = "720p"
-                        elif h >= 480:   res = "480p"
-                        else:            res = "?"
+                        # 统一走 codec.resolution_label（标准档位 + 容差对齐，宽度优先）
+                        res = codec.resolution_label(w, h) or "?"
                         track_lines.append(f"🎬 #{t.track_id} {codec} {res}")
                     elif t.track_type == "audio":
                         lang = t.language_raw or "und"
@@ -1425,6 +1423,7 @@ class MainWindow(QMainWindow):
                     t.track_name = p.get("track_name", "")
                     t.channels = p.get("audio_channels", 0)
                     t.height = p.get("height", 0)
+                    t.width = p.get("width", 0)
                     t.profile = p.get("codec_id", "")
                     t.action = "keep"
                     t.detected_iso = t.language

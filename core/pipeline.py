@@ -10,7 +10,7 @@
 import os
 import re
 
-from . import (audio_detect, douban, lang_map, policy, probe, remux,
+from . import (audio_detect, douban, lang_map, naming, policy, probe, remux,
                subtitle_detect, utils, logger)
 
 
@@ -409,14 +409,14 @@ def analyze_file(path, config, log=None, orig_path=None, temp_dir=None):
                 tracks.append(et)
                 next_id += 1
                 L(f"    外挂字幕: {sf} -> {name}({iso})")
-    # ---- 4. 生成轨道名 ----
+    # ---- 4. 生成轨道名（统一走 naming 单一来源） ----
     for t in tracks:
         if t.track_type == "audio":
-            t.track_name = lang_map.make_audio_track_name(
+            t.track_name = naming.make_audio_track_name(
                 t.detected_iso, t.codec, t.channel_layout, t.channels,
                 t.profile, t.title)
         elif t.track_type == "subtitle":
-            t.track_name = lang_map.get_subtitle_display_name(
+            t.track_name = naming.get_subtitle_track_name(
                 getattr(t, 'detected_kind', None), t.detected_iso)
 
     # ---- 5. 策略 ----
