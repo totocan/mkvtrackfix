@@ -135,6 +135,17 @@ class CacheManager:
                 if os.path.exists(local):
                     os.remove(local)
                 os.rename(tmp, local)
+            # v23.54: 写入后验证可读再标记就绪（避免前台读到一半的文件）
+            try:
+                with open(local, "rb") as _fchk:
+                    _fchk.read(16)
+            except Exception as _echk:
+                self._log(f"[缓存] 任务{idx + 1} 写入后验证失败: {_echk}")
+                try:
+                    os.remove(local)
+                except Exception:
+                    pass
+                return
             with self._lock:
                 self.ready[idx] = local
             self._log(f"[缓存] 任务{idx + 1} 已就绪: {os.path.basename(f)}")
