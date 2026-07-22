@@ -213,7 +213,6 @@ class TmdbManager(QMainWindow):
         link.setWordWrap(True)
         link.setStyleSheet("font-size:12pt; padding:8px;")
         vl2.addWidget(link)
-        vl2.addWidget(info)
         btn_sel = QPushButton("📁 选择 CSV 文件并导入")
         btn_sel.clicked.connect(self._import_csv)
         vl2.addWidget(btn_sel)
