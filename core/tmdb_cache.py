@@ -61,6 +61,56 @@ GENRE_MAP = {
 }
 
 
+# ── English country name -> 中文国名 静态映射（v23.56 补） ──
+# Kaggle CSV 的 production_countries[].name 是英文全名（如 "United States of America"），
+# COUNTRY_MAP 只有 ISO 码不够用。补这张表让本地批处理直接转英文为中文。
+EN_COUNTRY_MAP = {
+    "Afghanistan": "阿富汗", "Albania": "阿尔巴尼亚", "Algeria": "阿尔及利亚",
+    "Argentina": "阿根廷", "Armenia": "亚美尼亚", "Australia": "澳大利亚",
+    "Austria": "奥地利", "Azerbaijan": "阿塞拜疆", "Bahrain": "巴林",
+    "Bangladesh": "孟加拉国", "Belarus": "白俄罗斯", "Belgium": "比利时",
+    "Bolivia": "玻利维亚", "Bosnia and Herzegovina": "波黑",
+    "Brazil": "巴西", "Bulgaria": "保加利亚", "Cambodia": "柬埔寨",
+    "Canada": "加拿大", "Chile": "智利", "China": "中国", "Colombia": "哥伦比亚",
+    "Costa Rica": "哥斯达黎加", "Croatia": "克罗地亚", "Cuba": "古巴",
+    "Cyprus": "塞浦路斯", "Czech Republic": "捷克", "Czechia": "捷克",
+    "Denmark": "丹麦", "Dominican Republic": "多米尼加",
+    "Ecuador": "厄瓜多尔", "Egypt": "埃及", "El Salvador": "萨尔瓦多",
+    "Estonia": "爱沙尼亚", "Ethiopia": "埃塞俄比亚", "Finland": "芬兰",
+    "France": "法国", "Georgia": "格鲁吉亚", "Germany": "德国", "Ghana": "加纳",
+    "Greece": "希腊", "Guatemala": "危地马拉", "Hong Kong": "中国香港",
+    "Hungary": "匈牙利", "Iceland": "冰岛", "India": "印度", "Indonesia": "印度尼西亚",
+    "Iran": "伊朗", "Iraq": "伊拉克", "Ireland": "爱尔兰", "Israel": "以色列",
+    "Italy": "意大利", "Jamaica": "牙买加", "Japan": "日本", "Jordan": "约旦",
+    "Kazakhstan": "哈萨克斯坦", "Kenya": "肯尼亚", "Kuwait": "科威特",
+    "Kyrgyzstan": "吉尔吉斯斯坦", "Laos": "老挝", "Latvia": "拉脱维亚",
+    "Lebanon": "黎巴嫩", "Libya": "利比亚", "Lithuania": "立陶宛",
+    "Luxembourg": "卢森堡", "Macao": "中国澳门", "Malaysia": "马来西亚",
+    "Malta": "马耳他", "Mexico": "墨西哥", "Moldova": "摩尔多瓦",
+    "Monaco": "摩纳哥", "Mongolia": "蒙古", "Montenegro": "黑山",
+    "Morocco": "摩洛哥", "Myanmar": "缅甸", "Nepal": "尼泊尔",
+    "Netherlands": "荷兰", "New Zealand": "新西兰", "Nicaragua": "尼加拉瓜",
+    "Nigeria": "尼日利亚", "North Korea": "朝鲜", "Norway": "挪威",
+    "Pakistan": "巴基斯坦", "Palestine": "巴勒斯坦", "Panama": "巴拿马",
+    "Paraguay": "巴拉圭", "Peru": "秘鲁", "Philippines": "菲律宾",
+    "Poland": "波兰", "Portugal": "葡萄牙", "Puerto Rico": "波多黎各",
+    "Qatar": "卡塔尔", "Romania": "罗马尼亚", "Russia": "俄罗斯",
+    "Saudi Arabia": "沙特阿拉伯", "Serbia": "塞尔维亚", "Singapore": "新加坡",
+    "Slovakia": "斯洛伐克", "Slovenia": "斯洛文尼亚", "South Africa": "南非",
+    "South Korea": "韩国", "Spain": "西班牙", "Sri Lanka": "斯里兰卡",
+    "Sweden": "瑞典", "Switzerland": "瑞士", "Syria": "叙利亚",
+    "Taiwan": "中国台湾", "Tajikistan": "塔吉克斯坦", "Tanzania": "坦桑尼亚",
+    "Thailand": "泰国", "Tunisia": "突尼斯", "Turkey": "土耳其",
+    "Turkmenistan": "土库曼斯坦", "Uganda": "乌干达", "Ukraine": "乌克兰",
+    "United Arab Emirates": "阿联酋", "United Kingdom": "英国",
+    "United States of America": "美国", "Uruguay": "乌拉圭",
+    "Uzbekistan": "乌兹别克斯坦", "Venezuela": "委内瑞拉", "Vietnam": "越南",
+    "Yemen": "也门", "Zimbabwe": "津巴布韦", "Soviet Union": "苏联",
+    "East Germany": "东德", "West Germany": "西德", "Yugoslavia": "南斯拉夫",
+    "Czechoslovakia": "捷克斯洛伐克",
+}
+
+
 class TmdbCache:
     def __init__(self, db_path=None):
         self.db_path = db_path or CACHE_DB
@@ -295,18 +345,40 @@ class TmdbCache:
         return sorted(names, key=lambda s: s)
 
     def apply_country_names(self, limit=None):
-        """零成本补 country_name：用 COUNTRY_MAP 把 ISO 代码转中文（v23.54 新增）。
+        """本地批处理把 country_name 转中文（v23.54 新增，v23.56 同时支持英文名和 ISO 码）。
 
+        路径 1：country_name 已是英文全名（如 "United States of America"）→ EN_COUNTRY_MAP 转中文
+        路径 2：country_name 为空但 country（ISO 码）有值 → COUNTRY_MAP 转中文
+        已是中国的不动。
         返回补齐条数。limit=None 表示全量。
         """
         conn = self._get_conn()
-        sql = ("SELECT id, country FROM movies "
-               "WHERE IFNULL(country_name, '') = '' AND IFNULL(country, '') != ''")
+        # 中文集合（已转完的跳过）
+        zh_values = set(COUNTRY_MAP.values()) | set(EN_COUNTRY_MAP.values())
+        # 路径 1：英文名（country_name 非空 且 非中文）
+        sql1 = "SELECT id, country_name FROM movies WHERE country_name IS NOT NULL AND country_name != ''"
         if limit:
-            sql += f" LIMIT {int(limit)}"
-        rows = conn.execute(sql).fetchall()
+            sql1 += f" LIMIT {int(limit)}"
         done = 0
-        for r in rows:
+        for r in conn.execute(sql1).fetchall():
+            name = (r["country_name"] or "").strip()
+            if not name or name in zh_values:
+                continue
+            # 先按英文名查
+            cn = EN_COUNTRY_MAP.get(name) or COUNTRY_MAP.get(name.upper())
+            # 英文表里没有但 ISO 码有（比如 "USA" → 美国）
+            if not cn and r["country_name"] in COUNTRY_MAP:
+                cn = COUNTRY_MAP[r["country_name"]]
+            if cn and cn != name:
+                conn.execute("UPDATE movies SET country_name=? WHERE id=?",
+                             (cn, r["id"]))
+                done += 1
+        # 路径 2：ISO 码有但 country_name 空（极少，因为 Kaggle 也存了 name）
+        sql2 = ("SELECT id, country FROM movies "
+                "WHERE IFNULL(country_name,'') = '' AND IFNULL(country,'') != ''")
+        if limit:
+            sql2 += f" LIMIT {int(limit)}"
+        for r in conn.execute(sql2).fetchall():
             cn = COUNTRY_MAP.get((r["country"] or "").upper(), "")
             if cn:
                 conn.execute("UPDATE movies SET country_name=? WHERE id=?",

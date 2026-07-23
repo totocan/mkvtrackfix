@@ -1086,6 +1086,8 @@ class TmdbManager(QMainWindow):
         }
 
     def _browse_query(self):
+        kw = self.le_browse_kw.text().strip()
+        self._log(f"🔍 数据浏览查询: 关键词='{kw}'")
         self._browse_filters = self._current_browse_filters()
         self._browse_page_no = 1
         self._run_browse()
@@ -1112,19 +1114,25 @@ class TmdbManager(QMainWindow):
         self.browse_worker.start()
 
     def _on_browse_result(self, rows, total, page, page_size):
-        self.btn_browse_query.setEnabled(True)
-        pages = (total + page_size - 1) // page_size or 1
-        self.lbl_browse_page.setText(f"第 {page} / {pages} 页（共 {total:,} 行）")
-        self.tbl_browse.setRowCount(len(rows))
-        for i, r in enumerate(rows):
-            self.tbl_browse.setItem(i, 0, QTableWidgetItem(str(r.get("id") or "")))
-            self.tbl_browse.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
-            self.tbl_browse.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
-            self.tbl_browse.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
-            self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_name") or ""))
-            self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
-            self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("source") or ""))
-            self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("cached_at") or ""))
+        try:
+            self.btn_browse_query.setEnabled(True)
+            pages = (total + page_size - 1) // page_size or 1
+            self.lbl_browse_page.setText(f"第 {page} / {pages} 页（共 {total:,} 行）")
+            self.tbl_browse.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                self.tbl_browse.setItem(i, 0, QTableWidgetItem(str(r.get("id") or "")))
+                self.tbl_browse.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
+                self.tbl_browse.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
+                self.tbl_browse.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
+                self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_name") or ""))
+                self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
+                self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("source") or ""))
+                self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("cached_at") or ""))
+        except Exception as e:
+            import traceback
+            self.btn_browse_query.setEnabled(True)
+            self._log(f"⚠ 浏览结果显示失败: {e}")
+            self._log(traceback.format_exc())
 
     def _browse_export(self):
         if getattr(self, "export_worker", None) and self.export_worker.isRunning():
