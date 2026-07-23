@@ -1066,6 +1066,9 @@ def _exc_hook(exc_type, exc_val, exc_tb):
 
 
 def main():
+    # 压制 Qt 字体 OpenType 警告（不影响功能）
+    import os as _os
+    _os.environ["QT_LOGGING_RULES"] = "*.font.warning=false"
     sys.excepthook = _exc_hook
     # v23.53: 全局异常捕获，崩溃时写日志方便排查
     try:
