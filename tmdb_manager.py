@@ -340,9 +340,13 @@ class TmdbManager(QMainWindow):
         vl.addStretch()
         tabs.addTab(tab_overview, "概览 / 初始化")
 
-        # ===== 标签页5: 自动强化 =====
+        # ===== 标签页5: 自动强化（3:7 上下分栏） =====
         tab_str = QWidget()
-        xl = QVBoxLayout(tab_str)
+        from PyQt5.QtCore import Qt as _qtv
+        str_splitter = QSplitter(_qtv.Vertical)
+        str_splitter.setChildrenCollapsible(False)
+        str_top = QWidget()
+        xl = QVBoxLayout(str_top)
         xf = QFormLayout()
         self.le_apikey = QLineEdit()
         self.le_apikey.setEchoMode(QLineEdit.Password)
@@ -388,15 +392,41 @@ class TmdbManager(QMainWindow):
         xl.addLayout(hb_x)
         self.pb_str = QProgressBar()
         xl.addWidget(self.pb_str)
-        self.lbl_task = QLabel("任务进度: 0 / 0（未开始）")
-        self.lbl_task.setFont(self._mono_font)
-        xl.addWidget(self.lbl_task)
         self.lbl_elapsed = QLabel("已运行时间: 0s（未开始）")
         self.lbl_elapsed.setFont(self._mono_font)
         xl.addWidget(self.lbl_elapsed)
+        self.lbl_success = QLabel("成功爬取: 0 条")
+        self.lbl_success.setFont(self._mono_font)
+        xl.addWidget(self.lbl_success)
+        self.lbl_failed = QLabel("失败: 0 条")
+        self.lbl_failed.setFont(self._mono_font)
+        xl.addWidget(self.lbl_failed)
+        self.lbl_progress = QLabel("强化进度: 含中文名 0 / 0")
+        self.lbl_progress.setFont(self._mono_font)
+        xl.addWidget(self.lbl_progress)
         xl.addWidget(QLabel("说明：强化只补 title_zh / country_name，不依赖主界面扫描，"
                             "可挂机后台运行。"))
         xl.addStretch()
+        # ── 下区 70%：本标签页专属日志 ──
+        self._str_log = QTextEdit()
+        self._str_log.setReadOnly(True)
+        self._str_log.setStyleSheet("""
+            QTextEdit {
+                background-color: #0a0a0a;
+                color: #e0e0e0;
+                border: 1px solid #333;
+                font-family: Consolas;
+                font-size: 9pt;
+            }
+        """)
+        self._str_log.setFont(self._mono_font)
+        str_splitter.addWidget(str_top)
+        str_splitter.addWidget(self._str_log)
+        str_splitter.setStretchFactor(0, 3)
+        str_splitter.setStretchFactor(1, 7)
+        str_outer = QVBoxLayout(tab_str)
+        str_outer.setContentsMargins(0, 0, 0, 0)
+        str_outer.addWidget(str_splitter)
         tabs.addTab(tab_str, "🕷 自动强化")
         # 强化计时器（每秒刷新已运行时间）
         from PyQt5.QtCore import QTimer
@@ -578,11 +608,17 @@ class TmdbManager(QMainWindow):
     def _log(self, msg):
         html = self._log_html(msg)
         from PyQt5.QtGui import QTextCursor
+        # 写入底部共享日志
         self.log.moveCursor(QTextCursor.End)
         self.log.insertHtml(html + "<br>")
-        # 自动滚到底
         sb = self.log.verticalScrollBar()
         sb.setValue(sb.maximum())
+        # 写入强化标签页专属日志（如有）
+        if hasattr(self, "_str_log"):
+            self._str_log.moveCursor(QTextCursor.End)
+            self._str_log.insertHtml(html + "<br>")
+            sb2 = self._str_log.verticalScrollBar()
+            sb2.setValue(sb2.maximum())
         # 文件日志（纯文本）
         try:
             _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
@@ -731,6 +767,7 @@ class TmdbManager(QMainWindow):
         self.str_worker.log.connect(self._log)
         self.str_worker.progress.connect(
             lambda p, t, u: (setattr(self, "_str_done", p),
+                             setattr(self, "_str_success", u),
                              self.pb_str.setValue(int(p * 100 / self._str_total)) if self._str_total else None))
         self.str_worker.done.connect(lambda p, u: (
             self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条，用时 {self._fmt_elapsed()}"),
@@ -753,13 +790,30 @@ class TmdbManager(QMainWindow):
         import time as _t
         self._str_start_ts = _t.time()
         self._str_done = 0
+        self._str_success = 0
         self.lbl_elapsed.setText("已运行时间: 0s")
         self._str_timer.start()
         self._task_timer.start()
 
     def _tick_task(self):
+        """每 10 秒刷新：成功/失败/含中文名进度。"""
         done = getattr(self, "_str_done", 0)
-        self.lbl_task.setText(f"任务进度: {done:,} / {self._str_total:,}")
+        success = getattr(self, "_str_success", 0)
+        failed = done - success
+        self.lbl_success.setText(f"成功爬取: {success:,} 条")
+        self.lbl_failed.setText(f"失败: {failed:,} 条")
+        # 含中文名进度（数据库实时查询）
+        try:
+            from core.tmdb_cache import TmdbCache
+            conn = TmdbCache()._get_conn()
+            total = conn.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
+            with_zh = conn.execute(
+                "SELECT COUNT(*) FROM movies WHERE title_zh != '' AND title_zh IS NOT NULL"
+            ).fetchone()[0]
+            self.lbl_progress.setText(
+                f"强化进度: 含中文名 {with_zh:,} / {total:,}")
+        except Exception:
+            self.lbl_progress.setText("强化进度: 含中文名 - / -")
 
     def _tick_elapsed(self):
         import time as _t
