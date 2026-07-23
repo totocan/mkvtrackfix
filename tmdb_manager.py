@@ -307,6 +307,23 @@ class ConvertCountryWorker(QThread):
             self.log.emit(f"转国名异常: {e}")
 
 
+class BackfillCountryWorker(QThread):
+    """🩹 从 raw_json 反补 country / country_name（修 Kaggle 旧数据）。"""
+    log = pyqtSignal(str)
+    done = pyqtSignal(int)
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            self.log.emit("🩹 开始从 raw_json 反补国名（Kaggle 旧数据）...")
+            n = cache.backfill_country_from_raw_json()
+            self.log.emit(f"✅ 已反补 country_name {n:,} 条")
+            self.done.emit(n)
+        except Exception as e:
+            self.log.emit(f"反补国名异常: {e}")
+
+
 class GenreLoadWorker(QThread):
     """后台加载类型列表（避免大库 distinct_genres 卡 UI）。"""
     loaded = pyqtSignal(list)
@@ -558,6 +575,10 @@ class TmdbManager(QMainWindow):
         self.btn_conv_country = QPushButton("🌐 转中文国名（本地零成本）")
         self.btn_conv_country.clicked.connect(self._convert_country)
         hb_x.addWidget(self.btn_conv_country)
+        self.btn_backfill_country = QPushButton("🩹 从 raw_json 反补国名")
+        self.btn_backfill_country.setToolTip("Kaggle 旧数据用：解析 raw_json 把 country_name 从原始 JSON 补回来")
+        self.btn_backfill_country.clicked.connect(self._backfill_country)
+        hb_x.addWidget(self.btn_backfill_country)
         self.btn_strengthen = QPushButton("🕷 开始强化（补中文名）")
         self.btn_strengthen.clicked.connect(self._start_strengthen)
         hb_x.addWidget(self.btn_strengthen)
@@ -857,6 +878,16 @@ class TmdbManager(QMainWindow):
         self.conv_worker.done.connect(lambda n: (self._refresh_stats(),
                                                  self._log("📊 统计已刷新")))
         self.conv_worker.start()
+
+    def _backfill_country(self):
+        if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
+            QMessageBox.information(self, "提示", "反补进行中，请稍候")
+            return
+        self.backfill_worker = BackfillCountryWorker()
+        self.backfill_worker.log.connect(self._log)
+        self.backfill_worker.done.connect(lambda n: (self._refresh_stats(),
+                                                     self._log("📊 统计已刷新")))
+        self.backfill_worker.start()
 
     def _start_strengthen(self):
         k = self.le_apikey.text().strip() or load_config().get("tmdb_api_key", "")

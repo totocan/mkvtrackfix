@@ -315,6 +315,45 @@ class TmdbCache:
         conn.commit()
         return done
 
+    def backfill_country_from_raw_json(self, limit=None):
+        """从 raw_json（原始 CSV 行 JSON）反向补 country / country_name。
+
+        适用：Kaggle 导入时只取了 iso_3166_1 没取 name，导致 country_name 全空。
+        原始 CSV 行的 production_countries JSON 在 raw_json 里存着，
+        可以从 production_countries[0] 同时拿出 iso_3166_1 和 name 回填。
+        返回补齐条数。
+        """
+        conn = self._get_conn()
+        sql = ("SELECT id, raw_json FROM movies "
+               "WHERE IFNULL(country_name,'') = '' "
+               "AND raw_json IS NOT NULL AND raw_json != ''")
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+        rows = conn.execute(sql).fetchall()
+        done = 0
+        for r in rows:
+            try:
+                d = json.loads(r["raw_json"] or "{}")
+                pcs = d.get("production_countries")
+                if isinstance(pcs, str):
+                    pcs = json.loads(pcs)
+                if not pcs or not isinstance(pcs, list) or not pcs[0]:
+                    continue
+                first = pcs[0]
+                country = (first.get("iso_3166_1", "") or "").strip()
+                country_name = (first.get("name", "") or "").strip()
+                if not country_name and country:
+                    country_name = COUNTRY_MAP.get(country.upper(), "")
+                if country or country_name:
+                    conn.execute(
+                        "UPDATE movies SET country=?, country_name=? WHERE id=?",
+                        (country, country_name, r["id"]))
+                    done += 1
+            except Exception:
+                continue
+        conn.commit()
+        return done
+
     def strengthen_missing(self, api_key, interval=20, stop_check=None,
                            on_log=None, on_progress=None, batch_limit=0,
                            start_after_id=0):
@@ -520,15 +559,20 @@ class TmdbCache:
                         continue
                     key = self._normalize_key(title_en, year)
                     country = ""
+                    country = ""
+                    country_name = ""
                     countries = row.get("production_countries", "[]") or "[]"
                     try:
                         clist = json.loads(countries)
                         if clist:
-                            country = clist[0].get("iso_3166_1", "")
+                            country = (clist[0].get("iso_3166_1", "") or "").strip()
+                            country_name = (clist[0].get("name", "") or "").strip()
+                            if not country_name and country:
+                                country_name = COUNTRY_MAP.get(country.upper(), "")
                     except Exception:
                         pass
                     rows.append((
-                        key, title_en, "", year, country, "",
+                        key, title_en, "", year, country, country_name,
                         row.get("original_language", ""),
                         row.get("id"), json.dumps(row, ensure_ascii=False),
                         "kaggle", datetime.datetime.now().isoformat()
