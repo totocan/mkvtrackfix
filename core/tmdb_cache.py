@@ -94,7 +94,7 @@ class TmdbCache:
                 cached_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE INDEX IF NOT EXISTS idx_movies_search ON movies(search_key);
+            CREATE INDEX IF NOT EXISTS idx_movies_search ON movies(search_key COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
             CREATE INDEX IF NOT EXISTS idx_movies_year ON movies(year);
             CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);
@@ -567,6 +567,193 @@ class TmdbCache:
             "by_source": dict(sources),
         }
     
+    def index_status(self):
+        """返回索引状态（是否已建索引、行数、索引大小等）。
+
+        用于界面告知用户：当前库是否建立了搜索所需的索引。
+        缺失 idx_movies_search 时，泛搜索会退化为全表扫描（大库极慢甚至 OOM）。
+        """
+        conn = self._get_conn()
+        try:
+            row_count = conn.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
+        except Exception:
+            row_count = 0
+        # 列出 movies 表上的全部索引
+        idx_names = set()
+        try:
+            for (nm,) in conn.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='index' AND tbl_name='movies'").fetchall():
+                idx_names.add(nm)
+        except Exception:
+            pass
+        # 各索引占用空间（依赖 dbstat 虚拟表，SQLite 3.16+ 默认可用）
+        idx_sizes = {}
+        try:
+            for nm, pgsz in conn.execute(
+                    "SELECT name, SUM(pgsize) FROM dbstat "
+                    "WHERE name IN (SELECT name FROM sqlite_master "
+                    "WHERE type='index' AND tbl_name='movies') GROUP BY name"
+            ).fetchall():
+                idx_sizes[nm] = pgsz
+        except Exception:
+            pass
+        db_size = 0
+        try:
+            db_size = os.path.getsize(self.db_path)
+        except Exception:
+            pass
+        return {
+            "row_count": row_count,
+            "db_size": db_size,
+            "indexes": sorted(idx_names),
+            "has_search_index": "idx_movies_search" in idx_names,
+            "has_tmdb_id_index": "idx_movies_tmdb_id" in idx_names,
+            "has_year_index": "idx_movies_year" in idx_names,
+            "index_sizes": idx_sizes,
+        }
+
+    def build_search_index(self, on_progress=None, on_log=None, drop_first=True):
+        """手动（重建）TMDB 缓存库的全部索引。
+
+        - drop_first=True 时先 DROP 再 CREATE，确保真正重建（例如从别人复制来的
+          旧库可能缺索引，或统计信息过期需要 ANALYZE）。
+        - on_progress(step, total_steps, phase_name) 报告阶段进度；
+          on_log(msg) 报告日志。
+        说明：CREATE INDEX 是原子操作，SQLite 不提供逐行进度，故以「阶段」为粒度：
+              建 3 个索引 + ANALYZE，共 4 步。耗时取决于行数（百万级可能数十秒）。
+        """
+        conn = self._get_conn()
+        steps = ["idx_movies_search", "idx_movies_tmdb_id", "idx_movies_year", "ANALYZE"]
+        total = len(steps)
+        rc = 0
+        try:
+            rc = conn.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
+        except Exception:
+            pass
+        if on_log:
+            on_log(f"🔧 开始构建索引（共 {total} 步，当前 {rc:,} 行）...")
+        # 先 DROP（仅当存在），保证重建
+        if drop_first:
+            for nm in ("idx_movies_search", "idx_movies_tmdb_id", "idx_movies_year"):
+                try:
+                    conn.execute(f"DROP INDEX IF EXISTS {nm}")
+                except Exception as e:
+                    if on_log:
+                        on_log(f"  · 删除旧索引 {nm} 失败（可忽略）: {e}")
+            try:
+                conn.commit()
+            except Exception:
+                pass
+        creates = [
+            ("idx_movies_search", "CREATE INDEX idx_movies_search ON movies(search_key COLLATE NOCASE)"),
+            ("idx_movies_tmdb_id", "CREATE INDEX idx_movies_tmdb_id ON movies(tmdb_id)"),
+            ("idx_movies_year", "CREATE INDEX idx_movies_year ON movies(year)"),
+        ]
+        for i, (nm, sql) in enumerate(creates, start=1):
+            if on_log:
+                on_log(f"  ⏳ [{i}/{total}] 建立 {nm} ...")
+            if on_progress:
+                on_progress(i, total, f"建立 {nm}")
+            try:
+                conn.execute(sql)
+                conn.commit()
+                if on_log:
+                    on_log(f"  ✓ [{i}/{total}] {nm} 完成")
+            except Exception as e:
+                if on_log:
+                    on_log(f"  ✗ [{i}/{total}] {nm} 失败: {e}")
+                raise
+        if on_log:
+            on_log(f"  ⏳ [{total}/{total}] 更新统计信息 ANALYZE ...")
+        if on_progress:
+            on_progress(total, total, "ANALYZE")
+        try:
+            conn.execute("ANALYZE")
+            conn.commit()
+            if on_log:
+                on_log(f"  ✓ [{total}/{total}] ANALYZE 完成")
+        except Exception as e:
+            if on_log:
+                on_log(f"  ✗ ANALYZE 失败（可忽略）: {e}")
+        if on_log:
+            on_log("✅ 索引构建完成")
+
+    def browse_rows(self, filters=None, page=1, page_size=200):
+        """分页浏览 movies 表（DB 浏览器用）。
+
+        filters: dict，可含 keyword(标题包含) / year_from / year_to /
+                 zh('all'|'has'|'missing') / source(来源，None=全部)
+        返回 (rows: list[dict], total: int)。
+        """
+        filters = filters or {}
+        where, params = self._browse_where(filters)
+        conn = self._get_conn()
+        total = conn.execute(f"SELECT COUNT(*) FROM movies {where}", params).fetchone()[0]
+        off = max(0, (page - 1) * page_size)
+        cols = ("id", "title_en", "title_zh", "year", "country_name",
+                "language", "source", "cached_at")
+        sql = (f"SELECT {', '.join(cols)} FROM movies {where} "
+               f"ORDER BY id LIMIT ? OFFSET ?")
+        rows = conn.execute(sql, params + [page_size, off]).fetchall()
+        return [dict(r) for r in rows], total
+
+    def _browse_where(self, filters):
+        where = "WHERE 1=1"
+        params = []
+        kw = (filters.get("keyword") or "").strip()
+        if kw:
+            where += " AND (title_en LIKE ? OR title_zh LIKE ?)"
+            params += [f"%{kw}%", f"%{kw}%"]
+        yf = filters.get("year_from")
+        if yf:
+            where += " AND year >= ?"
+            params.append(int(yf))
+        yt = filters.get("year_to")
+        if yt:
+            where += " AND year <= ?"
+            params.append(int(yt))
+        zh = filters.get("zh", "all")
+        if zh == "has":
+            where += " AND title_zh != ''"
+        elif zh == "missing":
+            where += " AND title_zh = ''"
+        src = filters.get("source")
+        if src:
+            where += " AND source = ?"
+            params.append(src)
+        return where, params
+
+    def export_rows(self, filters, csv_path, callback=None):
+        """将筛选结果导出为 CSV（后台流式写入，避免大库占内存）。
+
+        callback(written, total) 报告进度；返回写入行数。
+        """
+        import csv as _csv
+        where, params = self._browse_where(filters)
+        conn = self._get_conn()
+        total = conn.execute(f"SELECT COUNT(*) FROM movies {where}", params).fetchone()[0]
+        cols = ("id", "title_en", "title_zh", "year", "country", "country_name",
+                "language", "tmdb_id", "source", "cached_at", "updated_at")
+        written = 0
+        try:
+            with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+                w = _csv.writer(f)
+                w.writerow(cols)
+                for r in conn.execute(
+                        f"SELECT {', '.join(cols)} FROM movies {where} ORDER BY id", params):
+                    w.writerow([r[c] if r[c] is not None else "" for c in cols])
+                    written += 1
+                    if callback and written % 5000 == 0:
+                        callback(written, total)
+            if callback:
+                callback(written, total)
+        except Exception:
+            if callback:
+                callback(written, total)
+            raise
+        return written
+
     def close(self):
         if self._conn:
             self._conn.close()

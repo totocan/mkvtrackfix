@@ -278,6 +278,73 @@ class GenreLoadWorker(QThread):
             self.loaded.emit([])
 
 
+class IndexBuildWorker(QThread):
+    """手动（重建）索引，后台执行避免大库卡 UI。"""
+    progress = pyqtSignal(int, int, str)  # step, total, phase_name
+    log = pyqtSignal(str)
+    done = pyqtSignal(str)
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            cache.build_search_index(
+                on_progress=lambda s, t, p: self.progress.emit(s, t, p),
+                on_log=lambda m: self.log.emit(m))
+            st = cache.index_status()
+            self.done.emit(
+                f"✅ 索引构建完成：搜索索引{'已建' if st['has_search_index'] else '缺失'}，"
+                f"数据行数 {st['row_count']:,}")
+        except Exception as e:
+            self.log.emit(f"索引构建异常: {e}")
+            self.done.emit(f"⚠ 索引构建失败: {e}")
+
+
+class DbBrowseWorker(QThread):
+    """数据浏览：分页查询 movies 表（后台避免大库卡 UI）。"""
+    result = pyqtSignal(list, int, int, int)  # rows, total, page, page_size
+    log = pyqtSignal(str)
+
+    def __init__(self, filters, page, page_size=200):
+        super().__init__()
+        self.filters = filters
+        self.page = page
+        self.page_size = page_size
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            rows, total = cache.browse_rows(self.filters, self.page, self.page_size)
+            self.result.emit(rows, total, self.page, self.page_size)
+        except Exception as e:
+            self.log.emit(f"浏览查询失败: {e}")
+
+
+class DbExportWorker(QThread):
+    """数据浏览：将筛选结果导出 CSV（后台流式写入，带进度）。"""
+    progress = pyqtSignal(int, int)  # written, total
+    log = pyqtSignal(str)
+    done = pyqtSignal(int, str)       # written, path
+
+    def __init__(self, filters, csv_path):
+        super().__init__()
+        self.filters = filters
+        self.csv_path = csv_path
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            n = cache.export_rows(
+                self.filters, self.csv_path,
+                callback=lambda w, t: self.progress.emit(w, t))
+            self.done.emit(n, self.csv_path)
+        except Exception as e:
+            self.log.emit(f"导出失败: {e}")
+            self.done.emit(0, self.csv_path)
+
+
 class TmdbManager(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -479,6 +546,113 @@ class TmdbManager(QMainWindow):
         self._task_timer = QTimer()
         self._task_timer.setInterval(10000)
         self._task_timer.timeout.connect(self._tick_task)
+
+        # ===== 标签页6: 数据库 / 索引 =====
+        tab_db = QWidget()
+        dl = QVBoxLayout(tab_db)
+
+        # 索引状态（搜索性能关键）
+        gb_idx = QGroupBox("索引状态（搜索性能关键）")
+        gl = QVBoxLayout(gb_idx)
+        self.lbl_idx_status = QLabel("点击「刷新索引状态」查看")
+        self.lbl_idx_status.setFont(self._mono_font)
+        self.lbl_idx_status.setWordWrap(True)
+        gl.addWidget(self.lbl_idx_status)
+        hb_idx = QHBoxLayout()
+        self.btn_refresh_idx = QPushButton("🔄 刷新索引状态")
+        self.btn_refresh_idx.clicked.connect(self._refresh_index_status)
+        self.btn_build_idx = QPushButton("🔧 建立 / 重建索引")
+        self.btn_build_idx.clicked.connect(self._start_build_index)
+        hb_idx.addWidget(self.btn_refresh_idx)
+        hb_idx.addWidget(self.btn_build_idx)
+        gl.addLayout(hb_idx)
+        self.pb_idx = QProgressBar()
+        gl.addWidget(self.pb_idx)
+        self.lbl_idx_phase = QLabel("状态: 空闲")
+        self.lbl_idx_phase.setFont(self._mono_font)
+        gl.addWidget(self.lbl_idx_phase)
+        self.lbl_idx_elapsed = QLabel("已用时间: 0s")
+        self.lbl_idx_elapsed.setFont(self._mono_font)
+        gl.addWidget(self.lbl_idx_elapsed)
+        dl.addWidget(gb_idx)
+
+        # 数据库信息（DB 浏览器基础）
+        gb_info = QGroupBox("数据库信息（DB 浏览器）")
+        il = QVBoxLayout(gb_info)
+        self.lbl_db_info = QLabel("")
+        self.lbl_db_info.setFont(self._mono_font)
+        self.lbl_db_info.setWordWrap(True)
+        il.addWidget(self.lbl_db_info)
+        dl.addWidget(gb_info)
+
+        # 数据浏览（DB 浏览器核心）
+        gb_browse = QGroupBox("数据浏览（movies 表，分页）")
+        bl = QVBoxLayout(gb_browse)
+        # 筛选表单
+        ff = QFormLayout()
+        self.le_browse_kw = QLineEdit()
+        self.le_browse_kw.setPlaceholderText("标题包含（中/英文均可）")
+        ff.addRow("关键词:", self.le_browse_kw)
+        hb_y = QHBoxLayout()
+        self.sp_year_from = QSpinBox()
+        self.sp_year_from.setRange(0, 3000)
+        self.sp_year_from.setValue(0)
+        self.sp_year_to = QSpinBox()
+        self.sp_year_to.setRange(0, 3000)
+        self.sp_year_to.setValue(3000)
+        hb_y.addWidget(QLabel("从"))
+        hb_y.addWidget(self.sp_year_from)
+        hb_y.addWidget(QLabel("到"))
+        hb_y.addWidget(self.sp_year_to)
+        ff.addRow("年份:", hb_y)
+        self.cb_browse_zh = QComboBox()
+        self.cb_browse_zh.addItems(["全部", "仅含中文名", "仅缺中文名"])
+        ff.addRow("中文名:", self.cb_browse_zh)
+        self.cb_browse_src = QComboBox()
+        self.cb_browse_src.addItem("全部来源", "")
+        self.cb_browse_src.addItem("tmdb", "tmdb")
+        self.cb_browse_src.addItem("kaggle", "kaggle")
+        self.cb_browse_src.addItem("manual", "manual")
+        ff.addRow("来源:", self.cb_browse_src)
+        bl.addLayout(ff)
+        # 按钮行
+        hb_b = QHBoxLayout()
+        self.btn_browse_query = QPushButton("🔍 查询")
+        self.btn_browse_query.clicked.connect(self._browse_query)
+        self.btn_browse_prev = QPushButton("◀ 上一页")
+        self.btn_browse_prev.clicked.connect(lambda: self._browse_page(-1))
+        self.btn_browse_next = QPushButton("下一页 ▶")
+        self.btn_browse_next.clicked.connect(lambda: self._browse_page(1))
+        self.btn_browse_export = QPushButton("📤 导出 CSV")
+        self.btn_browse_export.clicked.connect(self._browse_export)
+        hb_b.addWidget(self.btn_browse_query)
+        hb_b.addWidget(self.btn_browse_prev)
+        hb_b.addWidget(self.btn_browse_next)
+        hb_b.addWidget(self.btn_browse_export)
+        bl.addLayout(hb_b)
+        self.lbl_browse_page = QLabel("第 0 / 0 页（共 0 行）")
+        self.lbl_browse_page.setFont(self._mono_font)
+        bl.addWidget(self.lbl_browse_page)
+        self.tbl_browse = QTableWidget()
+        self.tbl_browse.setColumnCount(8)
+        self.tbl_browse.setHorizontalHeaderLabels(
+            ["ID", "英文标题", "中文标题", "年份", "国家", "语言", "来源", "缓存时间"])
+        self.tbl_browse.horizontalHeader().setStretchLastSection(True)
+        self.tbl_browse.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl_browse.setMinimumHeight(280)
+        bl.addWidget(self.tbl_browse, 1)
+        # 导出进度
+        self.pb_export = QProgressBar()
+        bl.addWidget(self.pb_export)
+        dl.addWidget(gb_browse, 1)
+
+        tabs.addTab(tab_db, "🗄 数据库")
+
+        # 索引构建计时器（每秒刷新已用时间）
+        self._idx_start_ts = 0
+        self._idx_timer = QTimer()
+        self._idx_timer.setInterval(1000)
+        self._idx_timer.timeout.connect(self._tick_index_elapsed)
 
         # ===== 日志 =====
         self.log = QTextEdit()
@@ -691,9 +865,10 @@ class TmdbManager(QMainWindow):
         if self._str_start_ts:
             self.lbl_elapsed.setText(f"已运行时间: {self._fmt_elapsed()}")
 
-    def _fmt_elapsed(self):
+    def _fmt_elapsed(self, start_ts=None):
         import time as _t
-        sec = int(_t.time() - (self._str_start_ts or _t.time()))
+        base = start_ts if start_ts is not None else self._str_start_ts
+        sec = int(_t.time() - (base or _t.time()))
         h, rem = divmod(sec, 3600)
         m, s = divmod(rem, 60)
         if h:
@@ -713,6 +888,153 @@ class TmdbManager(QMainWindow):
         self._task_timer.stop()
         self.btn_strengthen.setEnabled(True)
         self.btn_stop_str.setEnabled(False)
+
+
+    # ===== 数据库 / 索引 =====
+    def _refresh_index_status(self):
+        try:
+            from core.tmdb_cache import TmdbCache
+            cache = TmdbCache()
+            st = cache.index_status()
+            lines = []
+            lines.append(f"数据库路径: {cache.db_path}")
+            lines.append(f"数据行数:   {st['row_count']:,}")
+            mb = st['db_size'] // 1024 // 1024 if st['db_size'] else 0
+            lines.append(f"数据库大小: {mb} MB")
+            lines.append("─" * 32)
+            def _mark(b):
+                return "✓ 已建" if b else "✗ 缺失"
+            lines.append(f"搜索索引  idx_movies_search : {_mark(st['has_search_index'])}")
+            lines.append(f"TMDB索引  idx_movies_tmdb_id: {_mark(st['has_tmdb_id_index'])}")
+            lines.append(f"年份索引  idx_movies_year    : {_mark(st['has_year_index'])}")
+            for nm in ("idx_movies_search", "idx_movies_tmdb_id", "idx_movies_year"):
+                sz = st['index_sizes'].get(nm)
+                if sz is not None:
+                    lines.append(f"    └ {nm} 占用: {sz // 1024} KB")
+            self.lbl_idx_status.setText("\n".join(lines))
+            # 数据库信息（列结构）
+            cols = cache._get_conn().execute("PRAGMA table_info(movies)").fetchall()
+            col_names = ", ".join(c[1] for c in cols)
+            self.lbl_db_info.setText(
+                f"表 movies 列数: {len(cols)}\n"
+                f"全部索引: {', '.join(st['indexes']) if st['indexes'] else '（无）'}\n"
+                f"列: {col_names}"
+            )
+            if not st['has_search_index']:
+                self._log("⚠ 检测到搜索索引缺失：泛搜索会退化为全表扫描（大库极慢），"
+                          "请点「建立/重建索引」")
+        except Exception as e:
+            self.lbl_idx_status.setText(f"⚠ 读取索引状态失败: {e}")
+
+    def _start_build_index(self):
+        if getattr(self, "idx_worker", None) and self.idx_worker.isRunning():
+            QMessageBox.information(self, "提示", "索引构建进行中，请稍候")
+            return
+        self.idx_worker = IndexBuildWorker()
+        self.idx_worker.progress.connect(self._on_index_progress)
+        self.idx_worker.log.connect(self._log)
+        self.idx_worker.done.connect(self._on_index_done)
+        self.idx_worker.start()
+        self.btn_build_idx.setEnabled(False)
+        self.btn_refresh_idx.setEnabled(False)
+        self.pb_idx.setValue(0)
+        self.lbl_idx_phase.setText("状态: 构建中…")
+        self._idx_start_ts = time.time()
+        self.lbl_idx_elapsed.setText("已用时间: 0s")
+        self._idx_timer.start()
+
+    def _on_index_progress(self, step, total, phase):
+        self.pb_idx.setValue(int(step * 100 / total) if total else 0)
+        self.lbl_idx_phase.setText(f"状态: {phase}（{step}/{total}）")
+
+    def _on_index_done(self, msg):
+        self._idx_timer.stop()
+        self.pb_idx.setValue(100)
+        self.lbl_idx_phase.setText("状态: 完成 ✓")
+        self.lbl_idx_elapsed.setText(f"已用时间: {self._fmt_elapsed(self._idx_start_ts)}")
+        self._log(msg)
+        self.btn_build_idx.setEnabled(True)
+        self.btn_refresh_idx.setEnabled(True)
+        self._refresh_index_status()
+
+    def _tick_index_elapsed(self):
+        if self._idx_start_ts:
+            self.lbl_idx_elapsed.setText(
+                f"已用时间: {self._fmt_elapsed(self._idx_start_ts)}")
+
+
+    # ===== 数据浏览 =====
+    def _current_browse_filters(self):
+        yf = self.sp_year_from.value() or None
+        yt = self.sp_year_to.value() or None
+        if yf == 0:
+            yf = None
+        if yt == 3000:
+            yt = None
+        zh_map = {"全部": "all", "仅含中文名": "has", "仅缺中文名": "missing"}
+        return {
+            "keyword": self.le_browse_kw.text().strip() or None,
+            "year_from": yf,
+            "year_to": yt,
+            "zh": zh_map.get(self.cb_browse_zh.currentText(), "all"),
+            "source": self.cb_browse_src.currentData() or None,
+        }
+
+    def _browse_query(self):
+        self._browse_filters = self._current_browse_filters()
+        self._browse_page_no = 1
+        self._run_browse()
+
+    def _browse_page(self, delta):
+        if not getattr(self, "_browse_filters", None):
+            self._browse_query()
+            return
+        new = getattr(self, "_browse_page_no", 1) + delta
+        if new < 1:
+            return
+        self._browse_page_no = new
+        self._run_browse()
+
+    def _run_browse(self):
+        self.btn_browse_query.setEnabled(False)
+        w = DbBrowseWorker(self._browse_filters, self._browse_page_no, 200)
+        w.result.connect(self._on_browse_result)
+        w.log.connect(self._log)
+        w.start()
+
+    def _on_browse_result(self, rows, total, page, page_size):
+        self.btn_browse_query.setEnabled(True)
+        pages = (total + page_size - 1) // page_size or 1
+        self.lbl_browse_page.setText(f"第 {page} / {pages} 页（共 {total:,} 行）")
+        self.tbl_browse.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            self.tbl_browse.setItem(i, 0, QTableWidgetItem(str(r.get("id") or "")))
+            self.tbl_browse.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
+            self.tbl_browse.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
+            self.tbl_browse.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
+            self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_name") or ""))
+            self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
+            self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("source") or ""))
+            self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("cached_at") or ""))
+
+    def _browse_export(self):
+        if getattr(self, "export_worker", None) and self.export_worker.isRunning():
+            QMessageBox.information(self, "提示", "导出进行中，请稍候")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 CSV", "tmdb_export.csv", "CSV (*.csv)")
+        if not path:
+            return
+        filters = getattr(self, "_browse_filters", None) or self._current_browse_filters()
+        self.export_worker = DbExportWorker(filters, path)
+        self.export_worker.progress.connect(
+            lambda w, t: self.pb_export.setValue(int(w * 100 / t)) if t else None)
+        self.export_worker.log.connect(self._log)
+        self.export_worker.done.connect(
+            lambda n, p: (self.pb_export.setValue(100),
+                          self._log(f"✅ 已导出 {n:,} 行到 {p}")))
+        self.pb_export.setValue(0)
+        self.export_worker.start()
 
 
 def _exc_hook(exc_type, exc_val, exc_tb):
