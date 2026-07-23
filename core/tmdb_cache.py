@@ -300,7 +300,8 @@ class TmdbCache:
         返回补齐条数。limit=None 表示全量。
         """
         conn = self._get_conn()
-        sql = "SELECT id, country FROM movies WHERE country_name = '' AND country != ''"
+        sql = ("SELECT id, country FROM movies "
+               "WHERE IFNULL(country_name, '') = '' AND IFNULL(country, '') != ''")
         if limit:
             sql += f" LIMIT {int(limit)}"
         rows = conn.execute(sql).fetchall()

@@ -817,6 +817,16 @@ class TmdbManager(QMainWindow):
         if not k:
             QMessageBox.warning(self, "提示", "请先填写并保存 TMDB API Key")
             return
+        # 关键修复：断开旧 worker 的所有信号，避免前一次强化的剩余日志
+        # /进度混入新运行的显示（之前会出现"强化完成"后日志还在滚的现象）
+        old = getattr(self, "str_worker", None)
+        if old is not None:
+            try:
+                old.log.disconnect()
+                old.progress.disconnect()
+                old.done.disconnect()
+            except (TypeError, RuntimeError):
+                pass
         interval = float(self.cb_interval.currentData() or 20)
         # 开始前固定读取待补总数（分母固定，不再变动）
         from core.tmdb_cache import TmdbCache
