@@ -416,7 +416,7 @@ class TmdbManager(QMainWindow):
         hb_idx.addWidget(self.btn_refresh_idx)
         hb_idx.addWidget(self.btn_build_idx)
         gl.addLayout(hb_idx)
-        gl.addWidget(self.lbl_idx_phase) = QLabel("状态: 空闲")
+        self.lbl_idx_phase = QLabel("状态: 空闲")
         self.lbl_idx_phase.setFont(self._mono_font)
         gl.addWidget(self.lbl_idx_phase)
         self.lbl_idx_elapsed = QLabel("已用时间: 0s")
