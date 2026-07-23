@@ -131,8 +131,12 @@ class ConvertCountryWorker(QThread):
         try:
             cache = TmdbCache()
             self.log.emit("🌐 开始转中文国名（ISO→中文静态映射）...")
-            n = cache.apply_country_names()
+            n, unmatched = cache.apply_country_names()
             self.log.emit(f"✅ 已补齐中文国名 {n:,} 条")
+            if unmatched:
+                self.log.emit("   未匹配的值 TOP5（这些英文/ISO 码不在映射表里）：")
+                for val, cnt in unmatched:
+                    self.log.emit(f"     · '{val}': {cnt} 行")
             # 诊断：解释「待补 N 行但只更新 0 行」的原因
             try:
                 conn = cache._get_conn()

@@ -110,6 +110,8 @@ EN_COUNTRY_MAP = {
     "Czechoslovakia": "捷克斯洛伐克",
 }
 
+_ZH_VALUES = set(COUNTRY_MAP.values()) | set(EN_COUNTRY_MAP.values())
+
 
 class TmdbCache:
     def __init__(self, db_path=None):
@@ -353,27 +355,28 @@ class TmdbCache:
         返回补齐条数。limit=None 表示全量。
         """
         conn = self._get_conn()
-        # 中文集合（已转完的跳过）
-        zh_values = set(COUNTRY_MAP.values()) | set(EN_COUNTRY_MAP.values())
+        used_zh = set(COUNTRY_MAP.values()) | set(EN_COUNTRY_MAP.values())
         # 路径 1：英文名（country_name 非空 且 非中文）
         sql1 = "SELECT id, country_name FROM movies WHERE country_name IS NOT NULL AND country_name != ''"
         if limit:
             sql1 += f" LIMIT {int(limit)}"
         done = 0
+        unmatched = {}
         for r in conn.execute(sql1).fetchall():
             name = (r["country_name"] or "").strip()
-            if not name or name in zh_values:
+            if not name or name in used_zh:
                 continue
-            # 先按英文名查
+            # 先按英文全名查，再按 ISO 码大写查
             cn = EN_COUNTRY_MAP.get(name) or COUNTRY_MAP.get(name.upper())
-            # 英文表里没有但 ISO 码有（比如 "USA" → 美国）
-            if not cn and r["country_name"] in COUNTRY_MAP:
-                cn = COUNTRY_MAP[r["country_name"]]
+            if not cn:
+                # 还查不到就记下来供诊断
+                unmatched[name] = unmatched.get(name, 0) + 1
+                continue
             if cn and cn != name:
                 conn.execute("UPDATE movies SET country_name=? WHERE id=?",
                              (cn, r["id"]))
                 done += 1
-        # 路径 2：ISO 码有但 country_name 空（极少，因为 Kaggle 也存了 name）
+        # 路径 2：ISO 码有但 country_name 空
         sql2 = ("SELECT id, country FROM movies "
                 "WHERE IFNULL(country_name,'') = '' AND IFNULL(country,'') != ''")
         if limit:
@@ -385,7 +388,9 @@ class TmdbCache:
                              (cn, r["id"]))
                 done += 1
         conn.commit()
-        return done
+        # 诊断：没命中任何映射的前 N 个值
+        unmatched_top = sorted(unmatched.items(), key=lambda x: -x[1])[:5] if unmatched else []
+        return done, unmatched_top
 
     def backfill_country_from_raw_json(self, limit=None):
         """从 raw_json（原始 CSV 行 JSON）反向补 country / country_name。
@@ -525,6 +530,14 @@ class TmdbCache:
                 if not country_name and country:
                     country_name = COUNTRY_MAP.get(country.upper(), "")
                 if title_zh or country_name:
+                    # 已有中文国名 → 不覆盖（保留本地转好的中文）
+                    if country_name:
+                        existing_cn = conn.execute(
+                            "SELECT country_name FROM movies WHERE id=?",
+                            (mid,)).fetchone()
+                        existing_cn = existing_cn[0] if existing_cn else ""
+                        if existing_cn in _ZH_VALUES:
+                            country_name = existing_cn
                     conn.execute("""
                         UPDATE movies SET title_zh=?, country=?, country_name=?,
                         tmdb_id=?, updated_at=? WHERE id=?
