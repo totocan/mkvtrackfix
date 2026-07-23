@@ -548,7 +548,7 @@ class TmdbManager(QMainWindow):
         # 下区：共享日志（概览 / 数据库标签页用）
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(220)
+        self.log.setMinimumHeight(380)
         self.log.setStyleSheet("""
             QTextEdit {
                 background-color: #0a0a0a;
