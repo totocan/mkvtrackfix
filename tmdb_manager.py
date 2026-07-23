@@ -340,16 +340,15 @@ class TmdbManager(QMainWindow):
         self.btn_save_key.clicked.connect(self._save_apikey)
         xf.addRow(self.btn_save_key)
         self.cb_interval = QComboBox()
-        # (显示文本, 每条间隔秒数) —— 小数=高速档(条/秒)，整数=秒/条
         _speeds = [
-            ("1秒 50 条", 0.02), ("1秒 30 条", 0.033), ("1秒 20 条", 0.05),
-            ("1秒 10 条", 0.1), ("1秒 1 条", 1.0),
-            ("5秒 1 条", 5.0), ("10秒 1 条", 10.0), ("15秒 1 条", 15.0),
-            ("20秒 1 条", 20.0), ("30秒 1 条", 30.0),
+            ("最高速 (≈0.3s/条)", 0.3),
+            ("快速 (≈0.5s/条)", 0.5),
+            ("中速 (≈1.0s/条)", 1.0),
+            ("低速 (≈3.0s/条)", 3.0),
         ]
         for label, sec in _speeds:
             self.cb_interval.addItem(label, sec)
-        self.cb_interval.setCurrentIndex(8)  # 默认 20秒/条
+        self.cb_interval.setCurrentIndex(1)  # 默认 快速=0.5s
         xf.addRow("爬取速度:", self.cb_interval)
         xl.addLayout(xf)
         hb_x = QHBoxLayout()
@@ -417,9 +416,7 @@ class TmdbManager(QMainWindow):
         hb_idx.addWidget(self.btn_refresh_idx)
         hb_idx.addWidget(self.btn_build_idx)
         gl.addLayout(hb_idx)
-        self.pb_idx = QProgressBar()
-        gl.addWidget(self.pb_idx)
-        self.lbl_idx_phase = QLabel("状态: 空闲")
+        gl.addWidget(self.lbl_idx_phase) = QLabel("状态: 空闲")
         self.lbl_idx_phase.setFont(self._mono_font)
         gl.addWidget(self.lbl_idx_phase)
         self.lbl_idx_elapsed = QLabel("已用时间: 0s")
@@ -516,7 +513,16 @@ class TmdbManager(QMainWindow):
         splitter.addWidget(log)
         splitter.setStretchFactor(0, 6)
         splitter.setStretchFactor(1, 4)
+        # 窗口显示后设一次 6:4 初始比例
+        from PyQt5.QtCore import QTimer as _qtimer
+        _qtimer.singleShot(0, lambda: self._fit_splitter(splitter))
         return splitter, log
+
+    def _fit_splitter(self, splitter):
+        """按窗口当前宽度设 splitter 6:4 初始比例。"""
+        w = splitter.width()
+        if w > 100:
+            splitter.setSizes([int(w * 0.6), int(w * 0.4)])
 
     def _log(self, msg):
         for lw in self._log_widgets:
@@ -824,19 +830,16 @@ class TmdbManager(QMainWindow):
         self.idx_worker.start()
         self.btn_build_idx.setEnabled(False)
         self.btn_refresh_idx.setEnabled(False)
-        self.pb_idx.setValue(0)
         self.lbl_idx_phase.setText("状态: 构建中…")
         self._idx_start_ts = time.time()
         self.lbl_idx_elapsed.setText("已用时间: 0s")
         self._idx_timer.start()
 
     def _on_index_progress(self, step, total, phase):
-        self.pb_idx.setValue(int(step * 100 / total) if total else 0)
         self.lbl_idx_phase.setText(f"状态: {phase}（{step}/{total}）")
 
     def _on_index_done(self, msg):
         self._idx_timer.stop()
-        self.pb_idx.setValue(100)
         self.lbl_idx_phase.setText("状态: 完成 ✓")
         self.lbl_idx_elapsed.setText(f"已用时间: {self._fmt_elapsed(self._idx_start_ts)}")
         self._log(msg)

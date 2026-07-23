@@ -479,12 +479,13 @@ class TmdbCache:
         """
         import requests
         import time
+        _sess = requests.Session()  # v23.61: 复用连接降低延迟
         conn = self._get_conn()
 
         def _get(url, params, retries=3):
             for attempt in range(retries):
                 try:
-                    resp = requests.get(url, params=params, timeout=15)
+                    resp = _sess.get(url, params=params, timeout=15)
                 except Exception:
                     time.sleep(2)
                     continue
@@ -504,7 +505,7 @@ class TmdbCache:
             return None
 
         # 断点续传：从 start_after_id 之后开始；ORDER BY id 保证确定性顺序
-        sql = ("SELECT id, title_en, year FROM movies "
+        sql = ("SELECT id, title_en, year, tmdb_id FROM movies "
                "WHERE title_zh = '' AND title_en != '' AND id > ? "
                "ORDER BY id")
         if batch_limit:
@@ -518,50 +519,64 @@ class TmdbCache:
                 if on_log:
                     on_log("⏹ 收到停止信号，中止强化。")
                 break
-            mid_title, myear, mid = r["title_en"], r["year"], r["id"]
+            mid_title, myear, mid, tmdb_id = r["title_en"], r["year"], r["id"], r["tmdb_id"]
             last_id = mid
             try:
-                s_url = "https://api.themoviedb.org/3/search/movie"
-                params = {"api_key": api_key, "query": mid_title,
-                          "language": "zh-CN", "include_adult": False}
-                if myear:
-                    params["year"] = myear
-                resp = _get(s_url, params)
-                if resp is None:
-                    processed += 1
-                    time.sleep(interval)
-                    continue
-                if resp.status_code != 200:
-                    if on_log:
-                        on_log(f"  ✗ [{mid_title}] API {resp.status_code}")
-                    processed += 1
-                    time.sleep(interval)
-                    continue
-                sdata = resp.json()
-                res = (sdata.get("results") or [])
-                if not res:
-                    if on_log:
-                        on_log(f"  · [{mid_title}] 无搜索结果")
-                    processed += 1
-                    time.sleep(interval)
-                    continue
-                top = res[0]
-                title_zh = top.get("title") or top.get("original_title") or ""
-                tmdb_id = top.get("id")
-                country_name = ""
+                title_zh = ""
                 country = ""
-                # 2) 详情补国家（production_countries）
-                if tmdb_id:
-                    d_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
-                    dresp = _get(d_url,
-                                 {"api_key": api_key, "language": "zh-CN"})
+                country_name = ""
+                fid = tmdb_id if (tmdb_id and tmdb_id > 0) else None
+                if fid:
+                    # v23.61: 复用 Kaggle 自带的 tmdb_id，跳过搜索直接查详情
+                    d_url = f"https://api.themoviedb.org/3/movie/{fid}"
+                    dresp = _get(d_url, {"api_key": api_key, "language": "zh-CN"})
                     if dresp is not None and dresp.status_code == 200:
                         dd = dresp.json()
+                        title_zh = dd.get("title") or dd.get("original_title") or ""
                         pcs = dd.get("production_countries") or []
                         if pcs:
                             country = pcs[0].get("iso_3166_1", "")
                             country_name = pcs[0].get("name", "") or \
                                 COUNTRY_MAP.get(country.upper(), "")
+                else:
+                    s_url = "https://api.themoviedb.org/3/search/movie"
+                    params = {"api_key": api_key, "query": mid_title,
+                              "language": "zh-CN", "include_adult": False}
+                    if myear:
+                        params["year"] = myear
+                    resp = _get(s_url, params)
+                    if resp is None:
+                        processed += 1
+                        time.sleep(interval)
+                        continue
+                    if resp.status_code != 200:
+                        if on_log:
+                            on_log(f"  ✗ [{mid_title}] API {resp.status_code}")
+                        processed += 1
+                        time.sleep(interval)
+                        continue
+                    sdata = resp.json()
+                    res = (sdata.get("results") or [])
+                    if not res:
+                        if on_log:
+                            on_log(f"  · [{mid_title}] 无搜索结果")
+                        processed += 1
+                        time.sleep(interval)
+                        continue
+                    top = res[0]
+                    title_zh = top.get("title") or top.get("original_title") or ""
+                    tmdb_id = top.get("id")
+                    if tmdb_id:
+                        d_url = f"https://api.themoviedb.org/3/movie/{tmdb_id}"
+                        dresp = _get(d_url,
+                                     {"api_key": api_key, "language": "zh-CN"})
+                        if dresp is not None and dresp.status_code == 200:
+                            dd = dresp.json()
+                            pcs = dd.get("production_countries") or []
+                            if pcs:
+                                country = pcs[0].get("iso_3166_1", "")
+                                country_name = pcs[0].get("name", "") or \
+                                    COUNTRY_MAP.get(country.upper(), "")
                 if not country_name and country:
                     country_name = COUNTRY_MAP.get(country.upper(), "")
                 if title_zh or country_name:
