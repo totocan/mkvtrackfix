@@ -264,6 +264,10 @@ class TmdbManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TMDB 缓存管理器")
+        from PyQt5.QtGui import QIcon
+        _ip = os.path.join(_APP_ROOT, "resources", "icons", "tmdb.svg")
+        if os.path.exists(_ip):
+            self.setWindowIcon(QIcon(_ip))
         self.scan_worker = None
         self._init_ui()
 
@@ -406,11 +410,15 @@ class TmdbManager(QMainWindow):
         self._task_timer.setInterval(10000)
         self._task_timer.timeout.connect(self._tick_task)
 
-        # ===== 标签页6: 数据库 / 索引 =====
+        # ===== 标签页6: 数据库 / 索引（左右分栏） =====
         tab_db = QWidget()
-        dl = QVBoxLayout(tab_db)
+        db_hl = QHBoxLayout(tab_db)
 
-        # 索引状态（搜索性能关键）
+        # ── 右区（30%）：索引状态 + 数据库信息 ──
+        right_panel = QWidget()
+        rv = QVBoxLayout(right_panel)
+        rv.setContentsMargins(0, 0, 0, 0)
+
         gb_idx = QGroupBox("索引状态（搜索性能关键）")
         gl = QVBoxLayout(gb_idx)
         self.lbl_idx_status = QLabel("点击「刷新索引状态」查看")
@@ -418,9 +426,9 @@ class TmdbManager(QMainWindow):
         self.lbl_idx_status.setWordWrap(True)
         gl.addWidget(self.lbl_idx_status)
         hb_idx = QHBoxLayout()
-        self.btn_refresh_idx = QPushButton("🔄 刷新索引状态")
+        self.btn_refresh_idx = QPushButton("🔄 刷新")
         self.btn_refresh_idx.clicked.connect(self._refresh_index_status)
-        self.btn_build_idx = QPushButton("🔧 建立 / 重建索引")
+        self.btn_build_idx = QPushButton("🔧 重建索引")
         self.btn_build_idx.clicked.connect(self._start_build_index)
         hb_idx.addWidget(self.btn_refresh_idx)
         hb_idx.addWidget(self.btn_build_idx)
@@ -431,18 +439,18 @@ class TmdbManager(QMainWindow):
         self.lbl_idx_elapsed = QLabel("已用时间: 0s")
         self.lbl_idx_elapsed.setFont(self._mono_font)
         gl.addWidget(self.lbl_idx_elapsed)
-        dl.addWidget(gb_idx)
+        rv.addWidget(gb_idx)
 
-        # 数据库信息（DB 浏览器基础）
-        gb_info = QGroupBox("数据库信息（DB 浏览器）")
+        gb_info = QGroupBox("数据库信息")
         il = QVBoxLayout(gb_info)
         self.lbl_db_info = QLabel("")
         self.lbl_db_info.setFont(self._mono_font)
         self.lbl_db_info.setWordWrap(True)
         il.addWidget(self.lbl_db_info)
-        dl.addWidget(gb_info)
+        rv.addWidget(gb_info)
+        rv.addStretch()
 
-        # 数据浏览（DB 浏览器核心）
+        # ── 左区（70%）：数据浏览 ──
         gb_browse = QGroupBox("数据浏览（movies 表，分页）")
         bl = QVBoxLayout(gb_browse)
         # 筛选表单
@@ -494,7 +502,10 @@ class TmdbManager(QMainWindow):
         # 导出进度
         self.pb_export = QProgressBar()
         bl.addWidget(self.pb_export)
-        dl.addWidget(gb_browse, 1)
+
+        # 7:3 左右分栏
+        db_hl.addWidget(gb_browse, 7)
+        db_hl.addWidget(right_panel, 3)
 
         tabs.addTab(tab_db, "🗄 数据库")
 
@@ -507,14 +518,72 @@ class TmdbManager(QMainWindow):
         # 下区：共享日志（跨标签，底部）
         self.log = QTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMinimumHeight(380)
+        self.log.setStyleSheet("""
+            QTextEdit {
+                background-color: #0a0a0a;
+                color: #e0e0e0;
+                border: 1px solid #333;
+            }
+        """)
         self.log.setFont(self._mono_font)
-        self.log.setMinimumHeight(130)
         main_vl.addWidget(self.log)
 
         self._refresh_stats()
 
+    def _log_html(self, msg):
+        """根据日志前缀返回 HTML 颜色化文本。"""
+        # 颜色映射
+        if msg.startswith("✅") or msg.startswith("✓"):
+            c = "#4caf50"  # 绿 — 成功
+        elif msg.startswith("⚠"):
+            c = "#ff9800"  # 橙 — 警告
+        elif msg.startswith("✗") or "失败" in msg[:30]:
+            c = "#f44336"  # 红 — 失败
+        elif msg.startswith("⏹"):
+            c = "#ff5722"  # 深橙 — 停止信号
+        elif msg.startswith("📌"):
+            c = "#29b6f6"  # 浅蓝 — 续跑
+        elif msg.startswith("🔧"):
+            c = "#ce93d8"  # 紫 — 索引
+        elif msg.startswith("🔄"):
+            c = "#4dd0e1"  # 青 — 刷新
+        elif msg.startswith("🔍"):
+            c = "#42a5f5"  # 蓝 — 查询
+        elif msg.startswith("🌐"):
+            c = "#81c784"  # 软绿 — 国名
+        elif msg.startswith("🩹"):
+            c = "#ffa726"  # 橙 — 反补
+        elif msg.startswith("↺") or msg.startswith("🔄"):
+            c = "#bdbdbd"  # 灰 — 重置
+        elif msg.startswith("═══"):
+            c = "#616161"  # 暗灰 — 分隔
+        elif msg.startswith("────────"):
+            c = "#4a4a4a"  # 更暗灰 — 任务分隔线
+        elif msg.startswith("  ") or msg.startswith("    "):
+            c = "#90a4ae"  # 蓝灰 — 详情缩进
+        else:
+            c = "#e0e0e0"  # 默认白灰
+        safe = (msg.replace("&", "&amp;")
+                    .replace("<", "&lt;").replace(">", "&gt;")
+                    .replace("\n", "<br>"))
+        return f'<span style="color:{c};font-family:Consolas;font-size:9pt;">{safe}</span>'
+
+    def _log_sep(self, label=""):
+        """输出任务分隔线（可选标签），颜色做暗便于区分。"""
+        line = f" ──────── {label} ──────── " if label else " ──────────────────────────────────"
+        self._log(line)
+    
+
     def _log(self, msg):
-        self.log.append(msg)
+        html = self._log_html(msg)
+        from PyQt5.QtGui import QTextCursor
+        self.log.moveCursor(QTextCursor.End)
+        self.log.insertHtml(html + "<br>")
+        # 自动滚到底
+        sb = self.log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        # 文件日志（纯文本）
         try:
             _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
             os.makedirs(os.path.dirname(_lp), exist_ok=True)
@@ -577,6 +646,7 @@ class TmdbManager(QMainWindow):
         QMessageBox.information(self, "已保存", "TMDB API Key 已写入 config.json")
 
     def _convert_country(self):
+        self._log_sep("转中文国名")
         # 互斥：强化 / 反补进行中时不能跑
         if getattr(self, "str_worker", None) and self.str_worker.isRunning():
             QMessageBox.warning(self, "提示", "强化进行中，请先停止强化")
@@ -591,6 +661,7 @@ class TmdbManager(QMainWindow):
         self.conv_worker.start()
 
     def _backfill_country(self):
+        self._log_sep("反补国名")
         # 互斥：强化 / 转国名进行中时不能跑
         if getattr(self, "str_worker", None) and self.str_worker.isRunning():
             QMessageBox.warning(self, "提示", "强化进行中，请先停止强化")
@@ -649,7 +720,7 @@ class TmdbManager(QMainWindow):
             ).fetchone()[0]
         except Exception:
             self._str_total = 0
-        self._log("══════ 新一次开始强化 ══════")
+        self._log_sep("开始强化")
         if start_after_id:
             self._log(f"📌 续跑模式：从 id>{start_after_id:,} 开始（清空续跑点：点「重置续跑」按钮）")
         else:
@@ -808,6 +879,7 @@ class TmdbManager(QMainWindow):
             self.lbl_idx_status.setText(f"⚠ 读取索引状态失败: {e}")
 
     def _start_build_index(self):
+        self._log_sep("建立 / 重建索引")
         if getattr(self, "idx_worker", None) and self.idx_worker.isRunning():
             QMessageBox.information(self, "提示", "索引构建进行中，请稍候")
             return
@@ -854,6 +926,7 @@ class TmdbManager(QMainWindow):
         }
 
     def _browse_query(self):
+        self._log_sep("数据浏览查询")
         kw = self.le_browse_kw.text().strip()
         self._log(f"🔍 数据浏览查询: 关键词='{kw}'")
         self._browse_filters = self._current_browse_filters()
