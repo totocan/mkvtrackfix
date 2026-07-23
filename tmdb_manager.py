@@ -704,6 +704,10 @@ class TmdbManager(QMainWindow):
         if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
             QMessageBox.warning(self, "提示", "反补国名进行中，请等待完成")
             return
+        # 防止重复点击（旧 worker 可能还没完成）
+        if getattr(self, "str_worker", None) and self.str_worker.isRunning():
+            QMessageBox.warning(self, "提示", "强化进行中，请先停止")
+            return
         # 关键修复：断开旧 worker 的所有信号，避免前一次强化的剩余日志
         # /进度混入新运行的显示（之前会出现"强化完成"后日志还在滚的现象）
         old = getattr(self, "str_worker", None)
@@ -742,7 +746,7 @@ class TmdbManager(QMainWindow):
             self._log(f"📌 续跑模式：从 id>{start_after_id:,} 开始（清空续跑点：点「重置续跑」按钮）")
         else:
             self._log(f"📌 续跑模式：续跑点不存在，从头开始（所有未填 title_zh 的行都处理）")
-        self.lbl_task.setText(f"任务进度: 0 / {self._str_total:,}")
+        self.lbl_progress.setText(f"强化进度: 含中文名 0 / {self._str_total:,}")
         self.pb_str.setValue(0)
         self.str_worker = StrengthenWorker(k, interval, start_after_id=start_after_id)
         self.str_worker.log.connect(self._log)
@@ -753,7 +757,7 @@ class TmdbManager(QMainWindow):
         self.str_worker.done.connect(lambda p, u: (
             self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条，用时 {self._fmt_elapsed()}"),
             self.pb_str.setValue(100),
-            self.lbl_task.setText(f"任务进度: {p:,} / {self._str_total:,}（已完成）"),
+            self.lbl_progress.setText(f"强化进度: 含中文名 - / -"),
             self._refresh_stats(), self._str_timer.stop(), self._task_timer.stop(),
             self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False),
             # 互斥解除
