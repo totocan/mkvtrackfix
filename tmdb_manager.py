@@ -730,23 +730,49 @@ class TmdbManager(QMainWindow):
         self.btn_reset_str.setEnabled(True)
 
     def _reset_strengthen_resume(self):
-        """清空续跑点，下次强化从头开始。"""
-        from core.tmdb_cache import CACHE_DIR
+        """完全重置：清空续跑点 + 清空已强化的数据（title_zh / country / country_name / country_revised）。
+
+        下次「开始强化」所有行从零重新处理。
+        """
+        reply = QMessageBox.question(
+            self, "确认完全重置",
+            "完全重置将清空所有已强化的中文标题和国家数据\n"
+            "（title_zh / country / country_name / country_revised），\n"
+            "下次强化将从零重新处理全部 1.2M 行。\n确定继续吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            self._log("完全重置已取消")
+            return
+
+        from core.tmdb_cache import TmdbCache, CACHE_DIR
+        # 1) 删续跑点
         state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
-        self._log(f"重置续跑：目标文件 {state_path}")
+        self._log(f"完全重置：删除续跑点 {state_path}")
         try:
             if os.path.exists(state_path):
                 os.remove(state_path)
-                # 立即确认
-                gone = not os.path.exists(state_path)
-                if gone:
-                    self._log(f"✓ 已清空续跑点，下次「开始强化」将从头开始")
-                else:
-                    self._log(f"✗ 删除后文件仍在（被其他进程占用？）")
-            else:
-                self._log(f"文件本来就不存在（已无续跑点），无需重置")
+                self._log(f"✓ 续跑点已删除")
         except Exception as e:
-            self._log(f"重置续跑点失败: {e}")
+            self._log(f"✗ 删除续跑点失败: {e}")
+
+        # 2) 清空数据库
+        self._log("完全重置：清空 title_zh / country / country_name / country_revised ...")
+        try:
+            cache = TmdbCache()
+            conn = cache._get_conn()
+            before = conn.execute(
+                "SELECT COUNT(*) FROM movies "
+                "WHERE title_zh != '' OR country != '' OR country_name != '' OR country_revised != ''"
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE movies SET title_zh='', country='', country_name='', country_revised=''")
+            conn.commit()
+            self._log(f"✓ 已清空 {before:,} 行的中文标题/国家数据")
+            self._refresh_stats()
+        except Exception as e:
+            self._log(f"✗ 清空数据失败: {e}")
+
+        self._log("完全重置完成，下次「开始强化」将从零开始处理全部行")
 
 
     # ===== 数据库 / 索引 =====
