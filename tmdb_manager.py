@@ -655,6 +655,11 @@ class TmdbManager(QMainWindow):
             ).fetchone()[0]
         except Exception:
             self._str_total = 0
+        self._log("══════ 新一次开始强化 ══════")
+        if start_after_id:
+            self._log(f"📌 续跑模式：从 id>{start_after_id:,} 开始（清空续跑点：点「重置续跑」按钮）")
+        else:
+            self._log(f"📌 续跑模式：续跑点不存在，从头开始（所有未填 title_zh 的行都处理）")
         self.lbl_task.setText(f"任务进度: 0 / {self._str_total:,}")
         self.pb_str.setValue(0)
         self.str_worker = StrengthenWorker(k, interval, start_after_id=start_after_id)
@@ -667,10 +672,18 @@ class TmdbManager(QMainWindow):
             self.pb_str.setValue(100),
             self.lbl_task.setText(f"任务进度: {p:,} / {self._str_total:,}（已完成）"),
             self._refresh_stats(), self._str_timer.stop(), self._task_timer.stop(),
-            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False)))
+            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False),
+            # 互斥解除
+            self.btn_conv_country.setEnabled(True),
+            self.btn_backfill_country.setEnabled(True),
+            self.btn_reset_str.setEnabled(True)))
         self.str_worker.start()
+        # 互斥锁定：转国名/反补/重置续跑 全部灰
         self.btn_strengthen.setEnabled(False)
         self.btn_stop_str.setEnabled(True)
+        self.btn_conv_country.setEnabled(False)
+        self.btn_backfill_country.setEnabled(False)
+        self.btn_reset_str.setEnabled(False)
         # 启动计时 + 任务进度刷新
         import time as _t
         self._str_start_ts = _t.time()
@@ -711,17 +724,27 @@ class TmdbManager(QMainWindow):
         self._task_timer.stop()
         self.btn_strengthen.setEnabled(True)
         self.btn_stop_str.setEnabled(False)
+        # 互斥解除
+        self.btn_conv_country.setEnabled(True)
+        self.btn_backfill_country.setEnabled(True)
+        self.btn_reset_str.setEnabled(True)
 
     def _reset_strengthen_resume(self):
-        """清空续跑点，下次强化从首条未完成记录开始。"""
+        """清空续跑点，下次强化从头开始。"""
         from core.tmdb_cache import CACHE_DIR
         state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
+        self._log(f"重置续跑：目标文件 {state_path}")
         try:
             if os.path.exists(state_path):
                 os.remove(state_path)
-                self._log("↺ 已清空续跑点，下次「开始强化」将从头开始")
+                # 立即确认
+                gone = not os.path.exists(state_path)
+                if gone:
+                    self._log(f"✓ 已清空续跑点，下次「开始强化」将从头开始")
+                else:
+                    self._log(f"✗ 删除后文件仍在（被其他进程占用？）")
             else:
-                self._log("↺ 续跑点本就不存在，无需重置")
+                self._log(f"文件本来就不存在（已无续跑点），无需重置")
         except Exception as e:
             self._log(f"重置续跑点失败: {e}")
 
