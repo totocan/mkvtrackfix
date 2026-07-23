@@ -340,13 +340,9 @@ class TmdbManager(QMainWindow):
         vl.addStretch()
         tabs.addTab(tab_overview, "概览 / 初始化")
 
-        # ===== 标签页5: 自动强化（3:7 上下分栏） =====
+        # ===== 标签页5: 自动强化（简单布局，底部日志统一由共享日志提供） =====
         tab_str = QWidget()
-        from PyQt5.QtCore import Qt as _qtv
-        str_splitter = QSplitter(_qtv.Vertical)
-        str_splitter.setChildrenCollapsible(False)
-        str_top = QWidget()
-        xl = QVBoxLayout(str_top)
+        xl = QVBoxLayout(tab_str)
         xf = QFormLayout()
         self.le_apikey = QLineEdit()
         self.le_apikey.setEchoMode(QLineEdit.Password)
@@ -407,26 +403,6 @@ class TmdbManager(QMainWindow):
         xl.addWidget(QLabel("说明：强化只补 title_zh / country_name，不依赖主界面扫描，"
                             "可挂机后台运行。"))
         xl.addStretch()
-        # ── 下区 70%：本标签页专属日志 ──
-        self._str_log = QTextEdit()
-        self._str_log.setReadOnly(True)
-        self._str_log.setStyleSheet("""
-            QTextEdit {
-                background-color: #0a0a0a;
-                color: #e0e0e0;
-                border: 1px solid #333;
-                font-family: Consolas;
-                font-size: 9pt;
-            }
-        """)
-        self._str_log.setFont(self._mono_font)
-        str_splitter.addWidget(str_top)
-        str_splitter.addWidget(self._str_log)
-        str_splitter.setStretchFactor(0, 3)
-        str_splitter.setStretchFactor(1, 7)
-        str_outer = QVBoxLayout(tab_str)
-        str_outer.setContentsMargins(0, 0, 0, 0)
-        str_outer.addWidget(str_splitter)
         tabs.addTab(tab_str, "🕷 自动强化")
         # 强化计时器（每秒刷新已运行时间）
         from PyQt5.QtCore import QTimer
@@ -548,7 +524,7 @@ class TmdbManager(QMainWindow):
         # 下区：共享日志（概览 / 数据库标签页用）
         self.log = QTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(380)
+        self.log.setMinimumHeight(720)
         self.log.setStyleSheet("""
             QTextEdit {
                 background-color: #0a0a0a;
@@ -608,17 +584,10 @@ class TmdbManager(QMainWindow):
     def _log(self, msg):
         html = self._log_html(msg)
         from PyQt5.QtGui import QTextCursor
-        # 写入底部共享日志（概览/数据库标签页用）
         self.log.moveCursor(QTextCursor.End)
         self.log.insertHtml(html + "<br>")
         sb = self.log.verticalScrollBar()
         sb.setValue(sb.maximum())
-        # 写入强化标签页内专属日志
-        if getattr(self, "_str_log", None):
-            self._str_log.moveCursor(QTextCursor.End)
-            self._str_log.insertHtml(html + "<br>")
-            sb2 = self._str_log.verticalScrollBar()
-            sb2.setValue(sb2.maximum())
         # 文件日志（纯文本）
         try:
             _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
