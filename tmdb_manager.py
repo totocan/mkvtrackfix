@@ -130,25 +130,25 @@ class ConvertCountryWorker(QThread):
         from core.tmdb_cache import TmdbCache, COUNTRY_MAP
         try:
             cache = TmdbCache()
-            self.log.emit("🌐 开始转中文国名（ISO→中文静态映射）...")
+            self.log.emit("🌐 转中文国名（写到【国家（修订）】列）...")
             n, unmatched = cache.apply_country_names()
-            self.log.emit(f"✅ 已补齐中文国名 {n:,} 条")
+            self.log.emit(f"✅ 已写入【国家（修订）】{n:,} 条")
             if unmatched:
-                self.log.emit("   未匹配的值 TOP5（这些英文/ISO 码不在映射表里）：")
+                self.log.emit("   未匹配的值 TOP5（这些 ISO 国家码/语言码不在映射表里）：")
                 for val, cnt in unmatched:
                     self.log.emit(f"     · '{val}': {cnt} 行")
-            # 诊断：解释「待补 N 行但只更新 0 行」的原因
+            # 诊断：解释「应该能填但没填上」的原因
             try:
                 conn = cache._get_conn()
                 total_match = conn.execute(
                     "SELECT COUNT(*) FROM movies "
-                    "WHERE IFNULL(country_name,'') = '' AND IFNULL(country,'') != ''"
+                    "WHERE (IFNULL(country,'') != '' OR IFNULL(language,'') != '') "
+                    "AND IFNULL(country_revised,'') = ''"
                 ).fetchone()[0]
                 if total_match == 0:
-                    self.log.emit("   诊断：没有「有 country 但无 country_name」的待补行")
-                    self.log.emit("     （要么已全部补齐，要么 Kaggle 导入时 production_countries 没拿到 country）")
+                    self.log.emit("   诊断：所有 country/language 已成功写入【国家（修订）】")
                 elif n == 0:
-                    self.log.emit(f"   诊断：仍待补 {total_match:,} 行，但本次更新 0")
+                    self.log.emit(f"   诊断：仍待补 {total_match:,} 行（country/language 都不在映射表里）")
                     if COUNTRY_MAP:
                         placeholders = ",".join("?" * len(COUNTRY_MAP))
                         cur = conn.execute(
@@ -812,7 +812,7 @@ class TmdbManager(QMainWindow):
                 self.tbl_browse.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
                 self.tbl_browse.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
                 self.tbl_browse.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
-                self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_name") or ""))
+                self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_revised") or ""))
                 self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
                 self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("source") or ""))
                 self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("cached_at") or ""))

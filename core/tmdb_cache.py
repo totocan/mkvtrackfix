@@ -113,6 +113,36 @@ EN_COUNTRY_MAP = {
 _ZH_VALUES = set(COUNTRY_MAP.values()) | set(EN_COUNTRY_MAP.values())
 
 
+# ── ISO 639-1 语言码 → 中文国家名（v23.56 修订列用） ──
+# 精度是"该语言的主国家"，仅作参考；同名语言可能跨多国（en 既美又英澳）。
+LANGUAGE_MAP = {
+    "en": "美国", "zh": "中国", "ja": "日本", "ko": "韩国",
+    "fr": "法国", "de": "德国", "es": "西班牙", "it": "意大利",
+    "pt": "葡萄牙", "ru": "俄罗斯", "hi": "印度",
+    "th": "泰国", "vi": "越南", "id": "印度尼西亚",
+    "ms": "马来西亚", "tl": "菲律宾", "ar": "阿联酋",
+    "tr": "土耳其", "pl": "波兰", "nl": "荷兰",
+    "sv": "瑞典", "no": "挪威", "da": "丹麦", "fi": "芬兰",
+    "el": "希腊", "he": "以色列", "cs": "捷克", "hu": "匈牙利",
+    "ro": "罗马尼亚", "uk": "乌克兰", "th": "泰国", "bg": "保加利亚",
+    "hr": "克罗地亚", "sr": "塞尔维亚", "sk": "斯洛伐克",
+    "lt": "立陶宛", "lv": "拉脱维亚", "et": "爱沙尼亚",
+    "is": "冰岛", "ga": "爱尔兰", "cy": "英国",
+    "ca": "西班牙", "gl": "西班牙", "eu": "西班牙",
+    "af": "南非", "sw": "肯尼亚", "zu": "南非",
+    "bn": "孟加拉国", "ta": "印度", "te": "印度", "ml": "印度",
+    "mr": "印度", "gu": "印度", "kn": "印度",
+    "ne": "尼泊尔", "si": "斯里兰卡", "my": "缅甸",
+    "km": "柬埔寨", "lo": "老挝", "mn": "蒙古",
+    "ka": "格鲁吉亚", "hy": "亚美尼亚", "az": "阿塞拜疆",
+    "kk": "哈萨克斯坦", "uz": "乌兹别克斯坦", "tg": "塔吉克斯坦",
+    "ky": "吉尔吉斯斯坦", "tk": "土库曼斯坦",
+    "ps": "阿富汗", "fa": "伊朗", "ku": "土耳其",
+    "yi": "德国", "jv": "印度尼西亚", "su": "印度尼西亚",
+    "ht": "海地", "la": "意大利",
+}
+
+
 class TmdbCache:
     def __init__(self, db_path=None):
         self.db_path = db_path or CACHE_DB
@@ -138,7 +168,8 @@ class TmdbCache:
                 title_zh TEXT,                    -- 中文标题
                 year INTEGER,                     -- 年份
                 country TEXT,                     -- ISO 3166-1 国家代码
-                country_name TEXT,                -- 中文国家名称
+                country_name TEXT,                -- 国家名称（原始，TMDB 英文；本地不动）
+                country_revised TEXT,             -- 中文国家名（修订版，本地批处理产物，命名/显示用）
                 language TEXT,                    -- ISO 639-1 语言代码
                 tmdb_id INTEGER,                 -- TMDB 电影 ID
                 raw_json TEXT,                    -- 完整的 TMDB 响应 JSON
@@ -149,6 +180,11 @@ class TmdbCache:
             CREATE INDEX IF NOT EXISTS idx_movies_search ON movies(search_key COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
             CREATE INDEX IF NOT EXISTS idx_movies_year ON movies(year);
+            -- v23.56: 老库自动加 country_revised 列
+            BEGIN;
+            SELECT CASE WHEN (SELECT COUNT(*) FROM pragma_table_info('movies') WHERE name='country_revised') = 0
+                        THEN (ALTER TABLE movies ADD COLUMN country_revised TEXT) END;
+            COMMIT;
             CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);
             INSERT INTO schema_version (version)
             SELECT {v} WHERE NOT EXISTS (SELECT 1 FROM schema_version);
@@ -347,48 +383,40 @@ class TmdbCache:
         return sorted(names, key=lambda s: s)
 
     def apply_country_names(self, limit=None):
-        """本地批处理把 country_name 转中文（v23.54 新增，v23.56 同时支持英文名和 ISO 码）。
+        """把【国家（修订）】列填上中文（v23.56 重设计）。
 
-        路径 1：country_name 已是英文全名（如 "United States of America"）→ EN_COUNTRY_MAP 转中文
-        路径 2：country_name 为空但 country（ISO 码）有值 → COUNTRY_MAP 转中文
-        已是中国的不动。
-        返回补齐条数。limit=None 表示全量。
+        逻辑：对每行优先用 country（ISO 码，COUNTRY_MAP），空时回退到 language（ISO 639-1，LANGUAGE_MAP）。
+        写入 country_revised 列（不改 country_name，那是原始数据，永远不动）。
+        每次调用都覆盖 country_revised：将来 country 被 TMDB 补上后再次点本按钮，
+        原本靠 language 撑着的行就会被更新成 country 来源的中文。
+        返回 (done, unmatched TOP5)。
         """
         conn = self._get_conn()
-        used_zh = set(COUNTRY_MAP.values()) | set(EN_COUNTRY_MAP.values())
-        # 路径 1：英文名（country_name 非空 且 非中文）
-        sql1 = "SELECT id, country_name FROM movies WHERE country_name IS NOT NULL AND country_name != ''"
+        sql = ("SELECT id, country, language FROM movies "
+               "WHERE IFNULL(country,'') != '' OR IFNULL(language,'') != ''")
         if limit:
-            sql1 += f" LIMIT {int(limit)}"
+            sql += f" LIMIT {int(limit)}"
         done = 0
         unmatched = {}
-        for r in conn.execute(sql1).fetchall():
-            name = (r["country_name"] or "").strip()
-            if not name or name in used_zh:
+        for r in conn.execute(sql).fetchall():
+            cid = r["id"]
+            country = (r["country"] or "").strip()
+            language = (r["language"] or "").strip()
+            if country:
+                cn = COUNTRY_MAP.get(country.upper(), "")
+                key = country if not cn else None
+            elif language:
+                cn = LANGUAGE_MAP.get(language.lower(), "")
+                key = language if not cn else None
+            else:
                 continue
-            # 先按英文全名查，再按 ISO 码大写查
-            cn = EN_COUNTRY_MAP.get(name) or COUNTRY_MAP.get(name.upper())
             if not cn:
-                # 还查不到就记下来供诊断
-                unmatched[name] = unmatched.get(name, 0) + 1
+                unmatched[key] = unmatched.get(key, 0) + 1
                 continue
-            if cn and cn != name:
-                conn.execute("UPDATE movies SET country_name=? WHERE id=?",
-                             (cn, r["id"]))
-                done += 1
-        # 路径 2：ISO 码有但 country_name 空
-        sql2 = ("SELECT id, country FROM movies "
-                "WHERE IFNULL(country_name,'') = '' AND IFNULL(country,'') != ''")
-        if limit:
-            sql2 += f" LIMIT {int(limit)}"
-        for r in conn.execute(sql2).fetchall():
-            cn = COUNTRY_MAP.get((r["country"] or "").upper(), "")
-            if cn:
-                conn.execute("UPDATE movies SET country_name=? WHERE id=?",
-                             (cn, r["id"]))
-                done += 1
+            conn.execute("UPDATE movies SET country_revised=? WHERE id=?",
+                         (cn, cid))
+            done += 1
         conn.commit()
-        # 诊断：没命中任何映射的前 N 个值
         unmatched_top = sorted(unmatched.items(), key=lambda x: -x[1])[:5] if unmatched else []
         return done, unmatched_top
 
@@ -828,7 +856,7 @@ class TmdbCache:
         conn = self._get_conn()
         total = conn.execute(f"SELECT COUNT(*) FROM movies {where}", params).fetchone()[0]
         off = max(0, (page - 1) * page_size)
-        cols = ("id", "title_en", "title_zh", "year", "country_name",
+        cols = ("id", "title_en", "title_zh", "year", "country_revised",
                 "language", "source", "cached_at")
         sql = (f"SELECT {', '.join(cols)} FROM movies {where} "
                f"ORDER BY id LIMIT ? OFFSET ?")
