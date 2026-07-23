@@ -1,5 +1,29 @@
 # MediaMetaFixer 变更说明
 
+## 🔧 v23.56 — TMDB 数据库索引可视化 + 手动重建（DB 浏览器起点）
+
+### 新增「🗄 数据库」标签页（tmdb_manager.py）
+- **索引状态可见**：实时显示 `idx_movies_search` / `idx_movies_tmdb_id` / `idx_movies_year`
+  三个索引的「已建 / 缺失」状态及各自占用空间，不再「调了库却不知道有没有索引」
+- **手动建立 / 重建索引**：一键触发 `core/tmdb_cache.build_search_index()`，
+  后台线程执行，带**进度条（4 阶段）+ 阶段状态 + 已用时间**，完成后自动刷新状态
+- **数据库信息面板（DB 浏览器基础）**：展示 `movies` 表列结构、全部索引清单、行数与库大小
+- 缺失搜索索引时自动提示「泛搜索会退化为全表扫描（大库极慢）」，引导用户点重建
+
+### 数据浏览（DB 浏览器核心）
+- **分页预览 movies 表**：每页 200 行，上一页/下一页，显示总页数 / 总行数
+- **按列筛选**：关键词（中/英文标题包含）、年份区间、中文名（全部 / 仅含 / 仅缺）、来源（tmdb / kaggle / manual）
+- **导出 CSV**：当前筛选结果后台流式写入（utf-8-sig，Excel 友好），带进度条，千万级也不占内存
+- 底层 `browse_rows()` / `export_rows()` 支持 LIMIT/OFFSET 分页与组合 WHERE 过滤
+
+### 索引质量修复（core/tmdb_cache.py）
+- `idx_movies_search` 改为 `COLLATE NOCASE`：**确保前缀 `LIKE` 真正走索引**
+  （此前 BINARY 索引在默认 `LIKE` 大小写不敏感下可能被优化器放弃，大库泛搜索退化为全表扫描）
+- 新增 `index_status()`：返回索引存在性 / 行数 / 索引大小，供界面查询
+- 新增 `build_search_index()`：DROP + 重建全部索引并 `ANALYZE`，支持进度/日志回调
+
+---
+
 ## 🔧 v23.55 — TMDB 管理器强化：年份档位 + 类型中文 + 高速档 + 崩溃日志
 
 ### 泛搜索（🔍 标签页）

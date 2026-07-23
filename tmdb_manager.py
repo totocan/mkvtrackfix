@@ -77,169 +77,42 @@ class ImportWorker(QThread):
         self.finished.emit(total)
 
 
-class ScanWorker(QThread):
-    log = pyqtSignal(str)
-    done = pyqtSignal(int)
-
-    def __init__(self, directory, recursive, interval):
-        super().__init__()
-        self.directory = directory
-        self.recursive = recursive
-        self.interval = interval
-        self._stop = False
-
-    def stop(self):
-        self._stop = True
-
-    def run(self):
-        from core.tmdb_cache import TmdbCache
-        import requests
-        import re
-        cache = TmdbCache()
-        processed = set()
-        count = 0
-        while not self._stop:
-            files = []
-            if self.recursive:
-                for root, dirs, fnames in os.walk(self.directory):
-                    for f in fnames:
-                        if f.lower().endswith(('.mkv', '.mp4')):
-                            files.append(os.path.join(root, f))
-            else:
-                for f in os.listdir(self.directory):
-                    if f.lower().endswith(('.mkv', '.mp4')):
-                        files.append(os.path.join(self.directory, f))
-            new_files = [f for f in files if f not in processed]
-            for f in new_files:
-                if self._stop:
-                    return
-                title, year = self._extract_info(f)
-                if not title:
-                    processed.add(f)
-                    continue
-                cached = cache.lookup(title, year)
-                if cached:
-                    processed.add(f)
-                    continue
-                self.log.emit(f"查: {title} ({year})...")
-                result = self._query_tmdb(title, year)
-                if result:
-                    cache.save(title, year, result)
-                    self.log.emit(f"  ✓ 已缓存")
-                    count += 1
-                else:
-                    self.log.emit(f"  ✗ 无结果")
-                processed.add(f)
-                time.sleep(1.5)
-            if not self.interval:
-                break
-            for _ in range(self.interval * 60):
-                if self._stop:
-                    return
-                time.sleep(1)
-        self.done.emit(count)
-
-    def _extract_info(self, path):
-        base = os.path.splitext(os.path.basename(path))[0]
-        m = re.search(r'[.\(]\s*(\d{4})\s*[.\)]', base)
-        year = int(m.group(1)) if m else None
-        if m:
-            title = base[:m.start()].replace('.', ' ').replace('_', ' ').strip()
-        else:
-            title = base.replace('.', ' ').replace('_', ' ').strip()
-        for suffix in ['bluray', 'web dl', 'webrip', 'hdrip', 'x264', 'x265',
-                       'h264', 'h265', '10bit', '2audio', 'remux', '2160p',
-                       '1080p', '720p', 'dts', 'ac3', 'aac', 'flac']:
-            title = re.sub(r'\b' + suffix + r'\b', '', title, flags=re.IGNORECASE)
-        title = ' '.join(title.split()).strip()
-        return title, year
-
-    def _query_tmdb(self, title, year):
-        try:
-            import requests
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-            }
-            url = f"https://www.themoviedb.org/search?query={requests.utils.quote(title)}"
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code != 200:
-                return None
-            mids = re.findall(r'/movie/(\d+)', resp.text)
-            if not mids:
-                return None
-            movie_id = mids[0]
-            url2 = f"https://www.themoviedb.org/movie/{movie_id}"
-            resp2 = requests.get(url2, headers=headers, timeout=15)
-            if resp2.status_code != 200:
-                return None
-            text = resp2.text
-            country = re.search(r'data-country-code="([^"]+)"', text)
-            lang = re.search(r'data-original-language="([^"]+)"', text)
-            title_zh_m = re.search(r'class="title"[^>]*>([^<]+)<', text)
-            return {
-                "title_en": title, "title_zh": title_zh_m.group(1).strip() if title_zh_m else "",
-                "country": country.group(1) if country else "",
-                "language": lang.group(1) if lang else "",
-                "tmdb_id": int(movie_id),
-                "source": "tmdb",
-            }
-        except Exception:
-            return None
-
-
-class BroadSearchWorker(QThread):
-    """泛搜索（分级+分页），后台执行避免大库卡 UI。"""
-    result = pyqtSignal(dict)
-    log = pyqtSignal(str)
-
-    def __init__(self, title, year, year_max, country, genre, page, page_size=100):
-        super().__init__()
-        self.title = title
-        self.year = year
-        self.year_max = year_max
-        self.country = country
-        self.genre = genre
-        self.page = page
-        self.page_size = page_size
-
-    def run(self):
-        from core.tmdb_cache import TmdbCache
-        cache = TmdbCache()
-        try:
-            res = cache.search_broad(self.title, self.year, self.year_max,
-                                     self.country, self.genre, self.page, self.page_size)
-            self.result.emit(res)
-        except Exception as e:
-            self.log.emit(f"搜索失败: {e}")
-
-
 class StrengthenWorker(QThread):
     """自动强化：TMDB API 批量补 title_zh + country_name（v23.54 新增）。"""
     log = pyqtSignal(str)
     progress = pyqtSignal(int, int, int)  # processed, total, updated
     done = pyqtSignal(int, int)
 
-    def __init__(self, api_key, interval, batch_limit=0):
+    def __init__(self, api_key, interval, batch_limit=0, start_after_id=0):
         super().__init__()
         self.api_key = api_key
         self.interval = interval
         self.batch_limit = batch_limit
+        self.start_after_id = start_after_id
         self._stop = False
 
     def stop(self):
         self._stop = True
 
     def run(self):
-        from core.tmdb_cache import TmdbCache
+        from core.tmdb_cache import TmdbCache, CACHE_DIR
+        import json
         cache = TmdbCache()
+        state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
         try:
-            processed, updated = cache.strengthen_missing(
+            processed, updated, last_id = cache.strengthen_missing(
                 self.api_key, interval=self.interval,
                 stop_check=lambda: self._stop,
                 on_log=lambda m: self.log.emit(m),
                 on_progress=lambda p, t, u: self.progress.emit(p, t, u),
-                batch_limit=self.batch_limit)
+                batch_limit=self.batch_limit,
+                start_after_id=self.start_after_id)
+            # 落盘续跑点（停止或完成都记录）
+            try:
+                with open(state_path, "w", encoding="utf-8") as f:
+                    json.dump({"last_id": last_id}, f)
+            except Exception:
+                pass
             self.done.emit(processed, updated)
         except Exception as e:
             self.log.emit(f"强化异常: {e}")
@@ -254,34 +127,147 @@ class ConvertCountryWorker(QThread):
         super().__init__()
 
     def run(self):
-        from core.tmdb_cache import TmdbCache
+        from core.tmdb_cache import TmdbCache, COUNTRY_MAP
         try:
             cache = TmdbCache()
-            self.log.emit("🌐 开始转中文国名（ISO→中文静态映射）...")
-            n = cache.apply_country_names()
-            self.log.emit(f"✅ 已补齐中文国名 {n:,} 条")
+            self.log.emit("🌐 转中文国名（写到【国家（修订）】列）...")
+            n, unmatched = cache.apply_country_names()
+            self.log.emit(f"✅ 已写入【国家（修订）】{n:,} 条")
+            if unmatched:
+                self.log.emit("   未匹配的值 TOP5（这些 ISO 国家码/语言码不在映射表里）：")
+                for val, cnt in unmatched:
+                    self.log.emit(f"     · '{val}': {cnt} 行")
+            # 诊断：解释「应该能填但没填上」的原因
+            try:
+                conn = cache._get_conn()
+                total_match = conn.execute(
+                    "SELECT COUNT(*) FROM movies "
+                    "WHERE (IFNULL(country,'') != '' OR IFNULL(language,'') != '') "
+                    "AND IFNULL(country_revised,'') = ''"
+                ).fetchone()[0]
+                if total_match == 0:
+                    self.log.emit("   诊断：所有 country/language 已成功写入【国家（修订）】")
+                elif n == 0:
+                    self.log.emit(f"   诊断：仍待补 {total_match:,} 行（country/language 都不在映射表里）")
+                    if COUNTRY_MAP:
+                        placeholders = ",".join("?" * len(COUNTRY_MAP))
+                        cur = conn.execute(
+                            f"SELECT country, COUNT(*) c FROM movies "
+                            f"WHERE IFNULL(country_name,'') = '' "
+                            f"AND IFNULL(country,'') != '' "
+                            f"AND country NOT IN ({placeholders}) "
+                            f"GROUP BY country ORDER BY c DESC LIMIT 5",
+                            list(COUNTRY_MAP.keys()),
+                        )
+                        rows = cur.fetchall()
+                        if rows:
+                            self.log.emit("   不在 COUNTRY_MAP 的 ISO 码 TOP5：")
+                            for code, c in rows:
+                                self.log.emit(f"     · {code}: {c:,} 行")
+                        else:
+                            self.log.emit("   所有待补 ISO 码都在 COUNTRY_MAP 内（异常，请检查 COUNTRY_MAP）")
+                    self.log.emit("   如需补全，编辑 core/tmdb_cache.py 的 COUNTRY_MAP 加码")
+            except Exception as e:
+                self.log.emit(f"   诊断查询失败: {e}")
             self.done.emit(n)
         except Exception as e:
             self.log.emit(f"转国名异常: {e}")
 
 
-class GenreLoadWorker(QThread):
-    """后台加载类型列表（避免大库 distinct_genres 卡 UI）。"""
-    loaded = pyqtSignal(list)
+class BackfillCountryWorker(QThread):
+    """🩹 从 raw_json 反补 country / country_name（修 Kaggle 旧数据）。"""
+    log = pyqtSignal(str)
+    done = pyqtSignal(int)
 
     def run(self):
         from core.tmdb_cache import TmdbCache
         try:
-            genres = TmdbCache().distinct_genres()
-            self.loaded.emit(genres)
-        except Exception:
-            self.loaded.emit([])
+            cache = TmdbCache()
+            self.log.emit("🩹 开始从 raw_json 反补国名（Kaggle 旧数据）...")
+            n = cache.backfill_country_from_raw_json()
+            self.log.emit(f"✅ 已反补 country_name {n:,} 条")
+            self.done.emit(n)
+        except Exception as e:
+            self.log.emit(f"反补国名异常: {e}")
+
+
+
+class IndexBuildWorker(QThread):
+    """手动（重建）索引，后台执行避免大库卡 UI。"""
+    progress = pyqtSignal(int, int, str)  # step, total, phase_name
+    log = pyqtSignal(str)
+    done = pyqtSignal(str)
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            cache.build_search_index(
+                on_progress=lambda s, t, p: self.progress.emit(s, t, p),
+                on_log=lambda m: self.log.emit(m))
+            st = cache.index_status()
+            self.done.emit(
+                f"✅ 索引构建完成：搜索索引{'已建' if st['has_search_index'] else '缺失'}，"
+                f"数据行数 {st['row_count']:,}")
+        except Exception as e:
+            self.log.emit(f"索引构建异常: {e}")
+            self.done.emit(f"⚠ 索引构建失败: {e}")
+
+
+class DbBrowseWorker(QThread):
+    """数据浏览：分页查询 movies 表（后台避免大库卡 UI）。"""
+    result = pyqtSignal(list, int, int, int)  # rows, total, page, page_size
+    log = pyqtSignal(str)
+
+    def __init__(self, filters, page, page_size=200):
+        super().__init__()
+        self.filters = filters
+        self.page = page
+        self.page_size = page_size
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            rows, total = cache.browse_rows(self.filters, self.page, self.page_size)
+            self.result.emit(rows, total, self.page, self.page_size)
+        except Exception as e:
+            self.log.emit(f"浏览查询失败: {e}")
+            self.result.emit([], 0, self.page, self.page_size)
+
+
+class DbExportWorker(QThread):
+    """数据浏览：将筛选结果导出 CSV（后台流式写入，带进度）。"""
+    progress = pyqtSignal(int, int)  # written, total
+    log = pyqtSignal(str)
+    done = pyqtSignal(int, str)       # written, path
+
+    def __init__(self, filters, csv_path):
+        super().__init__()
+        self.filters = filters
+        self.csv_path = csv_path
+
+    def run(self):
+        from core.tmdb_cache import TmdbCache
+        try:
+            cache = TmdbCache()
+            n = cache.export_rows(
+                self.filters, self.csv_path,
+                callback=lambda w, t: self.progress.emit(w, t))
+            self.done.emit(n, self.csv_path)
+        except Exception as e:
+            self.log.emit(f"导出失败: {e}")
+            self.done.emit(0, self.csv_path)
 
 
 class TmdbManager(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("TMDB 缓存管理器")
+        from PyQt5.QtGui import QIcon
+        _ip = os.path.join(_APP_ROOT, "resources", "icons", "tmdb.svg")
+        if os.path.exists(_ip):
+            self.setWindowIcon(QIcon(_ip))
         self.scan_worker = None
         self._init_ui()
 
@@ -301,25 +287,43 @@ class TmdbManager(QMainWindow):
         self._mono_font = QFont("Consolas", max(9, size - 1))
         self.setFont(self._ui_font)
 
-        tabs = QTabWidget()
-        self.setCentralWidget(tabs)
+        # ── 三区域垂直布局：监视器 + 标签页 + 日志 ──
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_vl = QVBoxLayout(central)
+        main_vl.setContentsMargins(4, 2, 4, 2)
+        main_vl.setSpacing(4)
 
-        # ===== 标签页1: 概览 =====
+        # 上区：系统资源监视器（跨标签共享）
+        from gui.sys_widget import SysMonitorWidget
+        self._mon = SysMonitorWidget()
+        self._mon.setFixedHeight(52)
+        main_vl.addWidget(self._mon)
+
+        # 中区：标签页（全宽，无右侧日志）
+        tabs = QTabWidget()
+        main_vl.addWidget(tabs, 1)
+
+        # ===== 标签页1: 概览 + 初始化（合并） =====
         tab_overview = QWidget()
         vl = QVBoxLayout(tab_overview)
+        # 上区：统计概览
         self.lbl_stats = QLabel("点击「刷新统计」查看缓存状态")
         self.lbl_stats.setFont(self._mono_font)
         self.lbl_stats.setWordWrap(True)
         vl.addWidget(self.lbl_stats)
+        hb_top = QHBoxLayout()
         btn_refresh = QPushButton("🔄 刷新统计")
         btn_refresh.clicked.connect(self._refresh_stats)
-        vl.addWidget(btn_refresh)
-        vl.addStretch()
-        tabs.addTab(tab_overview, "概览")
-
-        # ===== 标签页2: 初始化 =====
-        tab_init = QWidget()
-        vl2 = QVBoxLayout(tab_init)
+        hb_top.addWidget(btn_refresh)
+        hb_top.addStretch()
+        vl.addLayout(hb_top)
+        # 分隔
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        vl.addWidget(line)
+        # 下区：CSV 导入初始化
         link = QLabel(
             '<a href="https://www.kaggle.com/datasets/alanvourch/tmdb-movies-daily-updates">'
             '📥 打开 Kaggle 数据集下载页面</a><br>'
@@ -327,97 +331,16 @@ class TmdbManager(QMainWindow):
         link.setOpenExternalLinks(True)
         link.setWordWrap(True)
         link.setStyleSheet("font-size:12pt; padding:8px;")
-        vl2.addWidget(link)
+        vl.addWidget(link)
         btn_sel = QPushButton("📁 选择 CSV 文件并导入")
         btn_sel.clicked.connect(self._import_csv)
-        vl2.addWidget(btn_sel)
+        vl.addWidget(btn_sel)
         self.progress_bar = QProgressBar()
-        vl2.addWidget(self.progress_bar)
-        tabs.addTab(tab_init, "初始化")
+        vl.addWidget(self.progress_bar)
+        vl.addStretch()
+        tabs.addTab(tab_overview, "概览 / 初始化")
 
-        # ===== 标签页3: 预拉取 =====
-        tab_scan = QWidget()
-        vl3 = QVBoxLayout(tab_scan)
-        f3 = QFormLayout()
-        self.le_dir = QLineEdit()
-        self.le_dir.setPlaceholderText(r"\\NAS\影视\电影 或 D:\Movies")
-        btn_browse = QPushButton("浏览...")
-        btn_browse.clicked.connect(lambda: self.le_dir.setText(
-            QFileDialog.getExistingDirectory(self, "选择电影目录")))
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(self.le_dir, 1)
-        dir_row.addWidget(btn_browse)
-        f3.addRow("目录:", dir_row)
-        self.cb_recursive = QCheckBox("递归子目录")
-        self.cb_recursive.setChecked(True)
-        f3.addRow(self.cb_recursive)
-        self.sp_interval = QSpinBox()
-        self.sp_interval.setRange(0, 999)
-        self.sp_interval.setValue(30)
-        self.sp_interval.setSuffix(" 分钟(0=只扫一次)")
-        f3.addRow("后台间隔:", self.sp_interval)
-        vl3.addLayout(f3)
-        hb = QHBoxLayout()
-        self.btn_start_scan = QPushButton("▶ 开始预拉取")
-        self.btn_start_scan.clicked.connect(self._start_scan)
-        self.btn_stop_scan = QPushButton("⏹ 停止")
-        self.btn_stop_scan.clicked.connect(self._stop_scan)
-        self.btn_stop_scan.setEnabled(False)
-        hb.addWidget(self.btn_start_scan)
-        hb.addWidget(self.btn_stop_scan)
-        vl3.addLayout(hb)
-        tabs.addTab(tab_scan, "预拉取")
-
-        # ===== 标签页4: 泛搜索 =====
-        tab_search = QWidget()
-        sl = QVBoxLayout(tab_search)
-        sf = QFormLayout()
-        self.le_query = QLineEdit()
-        self.le_query.setPlaceholderText("输入电影名，可含 . 分隔，如 casino.royale.1967")
-        sf.addRow("关键词:", self.le_query)
-        # 年份下拉档位（X年以前 = year <= X），倒序：全部→2030→…→1910
-        self.cb_year = QComboBox()
-        self.cb_year.addItem("全部年份", 0)
-        for y in [2030, 2025, 2020, 2015] + list(range(2010, 1909, -10)):
-            self.cb_year.addItem(f"{y}年以前", y)
-        sf.addRow("年份:", self.cb_year)
-        self.cb_country = QLineEdit()
-        self.cb_country.setPlaceholderText("可选，国家代码或中文名，如 US / 美国")
-        sf.addRow("国家:", self.cb_country)
-        # 类型下拉初始化时不查库（避免大库卡死 UI），搜索时后台懒加载填充
-        self.cb_genre = QComboBox()
-        self.cb_genre.addItem("（全部类型）")
-        self.cb_genre.addItem("（加载中…）")
-        self._genres_loaded = False
-        sf.addRow("类型:", self.cb_genre)
-        sl.addLayout(sf)
-        hb_s = QHBoxLayout()
-        self.btn_search = QPushButton("🔍 搜索")
-        self.btn_search.clicked.connect(self._do_search)
-        hb_s.addWidget(self.btn_search)
-        hb_s.addStretch()
-        # 分页
-        self.btn_prev = QPushButton("◀ 上一页")
-        self.btn_prev.clicked.connect(lambda: self._page(-1))
-        self.btn_next = QPushButton("下一页 ▶")
-        self.btn_next.clicked.connect(lambda: self._page(1))
-        self.lbl_page = QLabel("第 0 / 0 页")
-        hb_s.addWidget(self.btn_prev)
-        hb_s.addWidget(self.lbl_page)
-        hb_s.addWidget(self.btn_next)
-        sl.addLayout(hb_s)
-        self.tbl_search = QTableWidget()
-        self.tbl_search.setColumnCount(6)
-        self.tbl_search.setHorizontalHeaderLabels(
-            ["匹配", "英文标题", "中文标题", "年份", "国家", "语言"])
-        self.tbl_search.horizontalHeader().setStretchLastSection(True)
-        self.tbl_search.setEditTriggers(QTableWidget.NoEditTriggers)
-        sl.addWidget(self.tbl_search, 1)
-        tabs.addTab(tab_search, "🔍 泛搜索")
-        self._search_page = 1
-        self._search_last = None
-
-        # ===== 标签页5: 自动强化 =====
+        # ===== 标签页5: 自动强化（简单布局，底部日志统一由共享日志提供） =====
         tab_str = QWidget()
         xl = QVBoxLayout(tab_str)
         xf = QFormLayout()
@@ -432,22 +355,25 @@ class TmdbManager(QMainWindow):
         self.btn_save_key.clicked.connect(self._save_apikey)
         xf.addRow(self.btn_save_key)
         self.cb_interval = QComboBox()
-        # (显示文本, 每条间隔秒数) —— 小数=高速档(条/秒)，整数=秒/条
         _speeds = [
-            ("1秒 50 条", 0.02), ("1秒 30 条", 0.033), ("1秒 20 条", 0.05),
-            ("1秒 10 条", 0.1), ("1秒 1 条", 1.0),
-            ("5秒 1 条", 5.0), ("10秒 1 条", 10.0), ("15秒 1 条", 15.0),
-            ("20秒 1 条", 20.0), ("30秒 1 条", 30.0),
+            ("最高速 (≈0.3s/条)", 0.3),
+            ("快速 (≈0.5s/条)", 0.5),
+            ("中速 (≈1.0s/条)", 1.0),
+            ("低速 (≈3.0s/条)", 3.0),
         ]
         for label, sec in _speeds:
             self.cb_interval.addItem(label, sec)
-        self.cb_interval.setCurrentIndex(8)  # 默认 20秒/条
+        self.cb_interval.setCurrentIndex(1)  # 默认 快速=0.5s
         xf.addRow("爬取速度:", self.cb_interval)
         xl.addLayout(xf)
         hb_x = QHBoxLayout()
         self.btn_conv_country = QPushButton("🌐 转中文国名（本地零成本）")
         self.btn_conv_country.clicked.connect(self._convert_country)
         hb_x.addWidget(self.btn_conv_country)
+        self.btn_backfill_country = QPushButton("🩹 从 raw_json 反补国名")
+        self.btn_backfill_country.setToolTip("Kaggle 旧数据用：解析 raw_json 把 country_name 从原始 JSON 补回来")
+        self.btn_backfill_country.clicked.connect(self._backfill_country)
+        hb_x.addWidget(self.btn_backfill_country)
         self.btn_strengthen = QPushButton("🕷 开始强化（补中文名）")
         self.btn_strengthen.clicked.connect(self._start_strengthen)
         hb_x.addWidget(self.btn_strengthen)
@@ -455,15 +381,25 @@ class TmdbManager(QMainWindow):
         self.btn_stop_str.clicked.connect(self._stop_strengthen)
         self.btn_stop_str.setEnabled(False)
         hb_x.addWidget(self.btn_stop_str)
+        self.btn_reset_str = QPushButton("↺ 重置续跑")
+        self.btn_reset_str.setToolTip("清空续跑点，下次强化从头开始")
+        self.btn_reset_str.clicked.connect(self._reset_strengthen_resume)
+        hb_x.addWidget(self.btn_reset_str)
         xl.addLayout(hb_x)
         self.pb_str = QProgressBar()
         xl.addWidget(self.pb_str)
-        self.lbl_task = QLabel("任务进度: 0 / 0（未开始）")
-        self.lbl_task.setFont(self._mono_font)
-        xl.addWidget(self.lbl_task)
         self.lbl_elapsed = QLabel("已运行时间: 0s（未开始）")
         self.lbl_elapsed.setFont(self._mono_font)
         xl.addWidget(self.lbl_elapsed)
+        self.lbl_success = QLabel("成功爬取: 0 条")
+        self.lbl_success.setFont(self._mono_font)
+        xl.addWidget(self.lbl_success)
+        self.lbl_failed = QLabel("失败: 0 条")
+        self.lbl_failed.setFont(self._mono_font)
+        xl.addWidget(self.lbl_failed)
+        self.lbl_progress = QLabel("强化进度: 含中文名 0 / 0")
+        self.lbl_progress.setFont(self._mono_font)
+        xl.addWidget(self.lbl_progress)
         xl.addWidget(QLabel("说明：强化只补 title_zh / country_name，不依赖主界面扫描，"
                             "可挂机后台运行。"))
         xl.addStretch()
@@ -480,17 +416,187 @@ class TmdbManager(QMainWindow):
         self._task_timer.setInterval(10000)
         self._task_timer.timeout.connect(self._tick_task)
 
-        # ===== 日志 =====
+        # ===== 标签页6: 数据库 / 索引（左右分栏） =====
+        tab_db = QWidget()
+        db_hl = QHBoxLayout(tab_db)
+
+        # ── 右区（30%）：索引状态 + 数据库信息 ──
+        right_panel = QWidget()
+        rv = QVBoxLayout(right_panel)
+        rv.setContentsMargins(0, 0, 0, 0)
+
+        gb_idx = QGroupBox("索引状态（搜索性能关键）")
+        gl = QVBoxLayout(gb_idx)
+        self.lbl_idx_status = QLabel("点击「刷新索引状态」查看")
+        self.lbl_idx_status.setFont(self._mono_font)
+        self.lbl_idx_status.setWordWrap(True)
+        gl.addWidget(self.lbl_idx_status)
+        hb_idx = QHBoxLayout()
+        self.btn_refresh_idx = QPushButton("🔄 刷新")
+        self.btn_refresh_idx.clicked.connect(self._refresh_index_status)
+        self.btn_build_idx = QPushButton("🔧 重建索引")
+        self.btn_build_idx.clicked.connect(self._start_build_index)
+        hb_idx.addWidget(self.btn_refresh_idx)
+        hb_idx.addWidget(self.btn_build_idx)
+        gl.addLayout(hb_idx)
+        self.lbl_idx_phase = QLabel("状态: 空闲")
+        self.lbl_idx_phase.setFont(self._mono_font)
+        gl.addWidget(self.lbl_idx_phase)
+        self.lbl_idx_elapsed = QLabel("已用时间: 0s")
+        self.lbl_idx_elapsed.setFont(self._mono_font)
+        gl.addWidget(self.lbl_idx_elapsed)
+        rv.addWidget(gb_idx)
+
+        gb_info = QGroupBox("数据库信息")
+        il = QVBoxLayout(gb_info)
+        self.lbl_db_info = QLabel("")
+        self.lbl_db_info.setFont(self._mono_font)
+        self.lbl_db_info.setWordWrap(True)
+        il.addWidget(self.lbl_db_info)
+        rv.addWidget(gb_info)
+        rv.addStretch()
+
+        # ── 左区（70%）：数据浏览 ──
+        gb_browse = QGroupBox("数据浏览（movies 表，分页）")
+        bl = QVBoxLayout(gb_browse)
+        # 筛选表单
+        ff = QFormLayout()
+        self.le_browse_kw = QLineEdit()
+        self.le_browse_kw.setPlaceholderText("标题包含（中/英文均可）")
+        ff.addRow("关键词:", self.le_browse_kw)
+        self.cb_browse_year = QComboBox()
+        self.cb_browse_year.addItem("全部年份", 0)
+        for y in [2030, 2025, 2020, 2015] + list(range(2010, 1909, -10)):
+            self.cb_browse_year.addItem(f"{y}年以前", y)
+        ff.addRow("年份:", self.cb_browse_year)
+        self.cb_browse_zh = QComboBox()
+        self.cb_browse_zh.addItems(["全部", "仅含中文名", "仅缺中文名"])
+        ff.addRow("中文名:", self.cb_browse_zh)
+        self.cb_browse_src = QComboBox()
+        self.cb_browse_src.addItem("全部来源", "")
+        self.cb_browse_src.addItem("tmdb", "tmdb")
+        self.cb_browse_src.addItem("kaggle", "kaggle")
+        self.cb_browse_src.addItem("manual", "manual")
+        ff.addRow("来源:", self.cb_browse_src)
+        bl.addLayout(ff)
+        # 按钮行
+        hb_b = QHBoxLayout()
+        self.btn_browse_query = QPushButton("🔍 查询")
+        self.btn_browse_query.clicked.connect(self._browse_query)
+        self.btn_browse_prev = QPushButton("◀ 上一页")
+        self.btn_browse_prev.clicked.connect(lambda: self._browse_page(-1))
+        self.btn_browse_next = QPushButton("下一页 ▶")
+        self.btn_browse_next.clicked.connect(lambda: self._browse_page(1))
+        self.btn_browse_export = QPushButton("📤 导出 CSV")
+        self.btn_browse_export.clicked.connect(self._browse_export)
+        hb_b.addWidget(self.btn_browse_query)
+        hb_b.addWidget(self.btn_browse_prev)
+        hb_b.addWidget(self.btn_browse_next)
+        hb_b.addWidget(self.btn_browse_export)
+        bl.addLayout(hb_b)
+        self.lbl_browse_page = QLabel("第 0 / 0 页（共 0 行）")
+        self.lbl_browse_page.setFont(self._mono_font)
+        bl.addWidget(self.lbl_browse_page)
+        self.tbl_browse = QTableWidget()
+        self.tbl_browse.setColumnCount(9)
+        self.tbl_browse.setHorizontalHeaderLabels(
+            ["ID", "英文标题", "中文标题", "年份", "国家（原始）", "国家（修订）", "语言", "来源", "缓存时间"])
+        self.tbl_browse.horizontalHeader().setStretchLastSection(True)
+        self.tbl_browse.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tbl_browse.setMinimumHeight(280)
+        bl.addWidget(self.tbl_browse, 1)
+        # 导出进度
+        self.pb_export = QProgressBar()
+        bl.addWidget(self.pb_export)
+
+        # 7:3 左右分栏
+        db_hl.addWidget(gb_browse, 7)
+        db_hl.addWidget(right_panel, 3)
+
+        tabs.addTab(tab_db, "🗄 数据库")
+
+        # 索引构建计时器（每秒刷新已用时间）
+        self._idx_start_ts = 0
+        self._idx_timer = QTimer()
+        self._idx_timer.setInterval(1000)
+        self._idx_timer.timeout.connect(self._tick_index_elapsed)
+
+        # 下区：共享日志（概览 / 数据库标签页用）
         self.log = QTextEdit()
         self.log.setReadOnly(True)
+        self.log.setMinimumHeight(720)
+        self.log.setStyleSheet("""
+            QTextEdit {
+                background-color: #0a0a0a;
+                color: #e0e0e0;
+                border: 1px solid #333;
+            }
+        """)
         self.log.setFont(self._mono_font)
-        self.log.setMinimumHeight(200)
-        tabs.addTab(self.log, "日志")
+        main_vl.addWidget(self.log)
 
         self._refresh_stats()
 
+    def _log_html(self, msg):
+        """根据日志前缀返回 HTML 颜色化文本。"""
+        # 颜色映射
+        if msg.startswith("✅") or msg.startswith("✓"):
+            c = "#4caf50"  # 绿 — 成功
+        elif msg.startswith("⚠"):
+            c = "#ff9800"  # 橙 — 警告
+        elif msg.startswith("✗") or "失败" in msg[:30]:
+            c = "#f44336"  # 红 — 失败
+        elif msg.startswith("⏹"):
+            c = "#ff5722"  # 深橙 — 停止信号
+        elif msg.startswith("📌"):
+            c = "#29b6f6"  # 浅蓝 — 续跑
+        elif msg.startswith("🔧"):
+            c = "#ce93d8"  # 紫 — 索引
+        elif msg.startswith("🔄"):
+            c = "#4dd0e1"  # 青 — 刷新
+        elif msg.startswith("🔍"):
+            c = "#42a5f5"  # 蓝 — 查询
+        elif msg.startswith("🌐"):
+            c = "#81c784"  # 软绿 — 国名
+        elif msg.startswith("🩹"):
+            c = "#ffa726"  # 橙 — 反补
+        elif msg.startswith("↺") or msg.startswith("🔄"):
+            c = "#bdbdbd"  # 灰 — 重置
+        elif msg.startswith("═══"):
+            c = "#616161"  # 暗灰 — 分隔
+        elif msg.startswith("────────"):
+            c = "#4a4a4a"  # 更暗灰 — 任务分隔线
+        elif msg.startswith("  ") or msg.startswith("    "):
+            c = "#90a4ae"  # 蓝灰 — 详情缩进
+        else:
+            c = "#e0e0e0"  # 默认白灰
+        safe = (msg.replace("&", "&amp;")
+                    .replace("<", "&lt;").replace(">", "&gt;")
+                    .replace("\n", "<br>"))
+        return f'<span style="color:{c};font-family:Consolas;font-size:9pt;">{safe}</span>'
+
+    def _log_sep(self, label=""):
+        """输出任务分隔线（可选标签），颜色做暗便于区分。"""
+        line = f" ──────── {label} ──────── " if label else " ──────────────────────────────────"
+        self._log(line)
+    
+
     def _log(self, msg):
-        self.log.append(msg)
+        html = self._log_html(msg)
+        from PyQt5.QtGui import QTextCursor
+        self.log.moveCursor(QTextCursor.End)
+        self.log.insertHtml(html + "<br>")
+        sb = self.log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        # 文件日志（纯文本）
+        try:
+            _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
+            os.makedirs(os.path.dirname(_lp), exist_ok=True)
+            with open(_lp, "a", encoding="utf-8") as _f:
+                import datetime as _dt
+                _f.write(f"[{_dt.datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+        except Exception:
+            pass
         # 独立日志文件（v23.55）：界面与文件双写，便于崩溃后排错
         try:
             _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
@@ -535,96 +641,6 @@ class TmdbManager(QMainWindow):
         self.worker.finished.connect(self._refresh_stats)
         self.worker.start()
 
-    def _start_scan(self):
-        directory = self.le_dir.text().strip()
-        if not directory or not os.path.isdir(directory):
-            QMessageBox.warning(self, "提示", "请选择有效的电影目录")
-            return
-        self.scan_worker = ScanWorker(
-            directory, self.cb_recursive.isChecked(), self.sp_interval.value())
-        self.scan_worker.log.connect(self._log)
-        self.scan_worker.done.connect(lambda n: self._log(f"共缓存 {n} 部电影"))
-        self.scan_worker.done.connect(self._refresh_stats)
-        self.scan_worker.start()
-        self.btn_start_scan.setEnabled(False)
-        self.btn_stop_scan.setEnabled(True)
-
-    def _stop_scan(self):
-        if self.scan_worker:
-            self.scan_worker.stop()
-            self._log("已发送停止信号，等待当前查询完成...")
-        self.btn_start_scan.setEnabled(True)
-        self.btn_stop_scan.setEnabled(False)
-
-    # ===== 泛搜索 =====
-    def _do_search(self):
-        q = self.le_query.text().strip()
-        if not q:
-            QMessageBox.warning(self, "提示", "请输入关键词")
-            return
-        # 首次搜索时后台懒加载类型列表（避免初始化卡大库）
-        if not self._genres_loaded:
-            self._load_genres_async()
-        # 年份下拉：全部=0，否则为 year_max（X年以前）
-        ym = int(self.cb_year.currentData() or 0)
-        year_max = ym if ym else None
-        country = self.cb_country.text().strip() or None
-        genre = self.cb_genre.currentText()
-        genre = genre if genre and genre != "（全部类型）" else None
-        self._search_page = 1
-        self._run_search(q, None, year_max, country, genre)
-
-    def _page(self, delta):
-        if not self._search_last:
-            return
-        new = self._search_page + delta
-        if new < 1 or new > self._search_last["pages"]:
-            return
-        self._search_page = new
-        r = self._search_last
-        self._run_search_from(r["_q"], r["_year"], r["_year_max"], r["_country"], r["_genre"])
-
-    def _run_search(self, q, year, year_max, country, genre):
-        self._search_q = (q, year, year_max, country, genre)
-        self._run_search_from(q, year, year_max, country, genre)
-
-    def _run_search_from(self, q, year, year_max, country, genre):
-        self.btn_search.setEnabled(False)
-        w = BroadSearchWorker(q, year, year_max, country, genre, self._search_page, 100)
-        w.result.connect(lambda res: self._show_search(res, q, year, year_max, country, genre))
-        w.log.connect(self._log)
-        w.start()
-
-    def _load_genres_async(self):
-        """后台拉类型列表填充下拉（避免初始化同步查大库卡死）。"""
-        self._genres_loaded = True  # 标记已触发，避免重复
-        self.gw = GenreLoadWorker()
-        self.gw.loaded.connect(self._on_genres_loaded)
-        self.gw.start()
-
-    def _on_genres_loaded(self, genres):
-        self.cb_genre.clear()
-        self.cb_genre.addItem("（全部类型）")
-        self.cb_genre.addItems(genres)
-        self._log(f"📂 类型列表已加载：{len(genres)} 种")
-
-    def _show_search(self, res, q, year, year_max, country, genre):
-        self.btn_search.setEnabled(True)
-        self._search_last = dict(res)
-        self._search_last.update(_q=q, _year=year, _year_max=year_max,
-                                  _country=country, _genre=genre)
-        self.lbl_page.setText(f"第 {res['page']} / {res['pages']} 页（共 {res['total']} 条）")
-        self.tbl_search.setRowCount(len(res["rows"]))
-        for i, r in enumerate(res["rows"]):
-            lvl = r.get("level", "")
-            self.tbl_search.setItem(i, 0, QTableWidgetItem(lvl))
-            self.tbl_search.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
-            self.tbl_search.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
-            self.tbl_search.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
-            self.tbl_search.setItem(i, 4, QTableWidgetItem(
-                r.get("country_name") or r.get("country") or ""))
-            self.tbl_search.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
-
     # ===== 自动强化 =====
     def _save_apikey(self):
         k = self.le_apikey.text().strip()
@@ -635,8 +651,13 @@ class TmdbManager(QMainWindow):
         QMessageBox.information(self, "已保存", "TMDB API Key 已写入 config.json")
 
     def _convert_country(self):
-        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
-            QMessageBox.information(self, "提示", "转中文国名进行中，请稍候")
+        self._log_sep("转中文国名")
+        # 互斥：强化 / 反补进行中时不能跑
+        if getattr(self, "str_worker", None) and self.str_worker.isRunning():
+            QMessageBox.warning(self, "提示", "强化进行中，请先停止强化")
+            return
+        if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
+            QMessageBox.warning(self, "提示", "反补进行中，请等待完成")
             return
         self.conv_worker = ConvertCountryWorker()
         self.conv_worker.log.connect(self._log)
@@ -644,56 +665,138 @@ class TmdbManager(QMainWindow):
                                                  self._log("📊 统计已刷新")))
         self.conv_worker.start()
 
+    def _backfill_country(self):
+        self._log_sep("反补国名")
+        # 互斥：强化 / 转国名进行中时不能跑
+        if getattr(self, "str_worker", None) and self.str_worker.isRunning():
+            QMessageBox.warning(self, "提示", "强化进行中，请先停止强化")
+            return
+        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
+            QMessageBox.warning(self, "提示", "转中文国名进行中，请等待完成")
+            return
+        self.backfill_worker = BackfillCountryWorker()
+        self.backfill_worker.log.connect(self._log)
+        self.backfill_worker.done.connect(lambda n: (self._refresh_stats(),
+                                                     self._log("📊 统计已刷新")))
+        self.backfill_worker.start()
+
     def _start_strengthen(self):
         k = self.le_apikey.text().strip() or load_config().get("tmdb_api_key", "")
         if not k:
             QMessageBox.warning(self, "提示", "请先填写并保存 TMDB API Key")
             return
+        # 互斥：转国名 / 反补进行中时不能跑强化
+        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
+            QMessageBox.warning(self, "提示", "转中文国名进行中，请等待完成")
+            return
+        if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
+            QMessageBox.warning(self, "提示", "反补国名进行中，请等待完成")
+            return
+        # 防止重复点击（旧 worker 可能还没完成）
+        if getattr(self, "str_worker", None) and self.str_worker.isRunning():
+            QMessageBox.warning(self, "提示", "强化进行中，请先停止")
+            return
+        # 关键修复：断开旧 worker 的所有信号，避免前一次强化的剩余日志
+        # /进度混入新运行的显示（之前会出现"强化完成"后日志还在滚的现象）
+        old = getattr(self, "str_worker", None)
+        if old is not None:
+            try:
+                old.log.disconnect()
+                old.progress.disconnect()
+                old.done.disconnect()
+            except (TypeError, RuntimeError):
+                pass
         interval = float(self.cb_interval.currentData() or 20)
-        # 开始前固定读取待补总数（分母固定，不再变动）
-        from core.tmdb_cache import TmdbCache
+        # 断点续读：读 state 文件，拿到上次的 last_id 作为本次起点
+        from core.tmdb_cache import TmdbCache, CACHE_DIR
+        import json as _json
+        state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
+        start_after_id = 0
+        try:
+            if os.path.exists(state_path):
+                with open(state_path, "r", encoding="utf-8") as _f:
+                    start_after_id = int(_json.load(_f).get("last_id", 0) or 0)
+        except Exception:
+            start_after_id = 0
+        if start_after_id:
+            self._log(f"📌 续跑模式：从 id>{start_after_id:,} 开始（清空续跑点：点「重置续跑」按钮）")
+        # 待补总数也按续跑点算，避免分母虚高
         try:
             self._str_total = TmdbCache()._get_conn().execute(
-                "SELECT COUNT(*) FROM movies WHERE title_zh = '' AND title_en != ''"
+                "SELECT COUNT(*) FROM movies "
+                "WHERE title_zh = '' AND title_en != '' AND id > ?",
+                (start_after_id,),
             ).fetchone()[0]
         except Exception:
             self._str_total = 0
-        self.lbl_task.setText(f"任务进度: 0 / {self._str_total:,}")
+        self._log_sep("开始强化")
+        if start_after_id:
+            self._log(f"📌 续跑模式：从 id>{start_after_id:,} 开始（清空续跑点：点「重置续跑」按钮）")
+        else:
+            self._log(f"📌 续跑模式：续跑点不存在，从头开始（所有未填 title_zh 的行都处理）")
+        self.lbl_progress.setText(f"强化进度: 含中文名 0 / {self._str_total:,}")
         self.pb_str.setValue(0)
-        self.str_worker = StrengthenWorker(k, interval)
+        self.str_worker = StrengthenWorker(k, interval, start_after_id=start_after_id)
         self.str_worker.log.connect(self._log)
         self.str_worker.progress.connect(
             lambda p, t, u: (setattr(self, "_str_done", p),
+                             setattr(self, "_str_success", u),
                              self.pb_str.setValue(int(p * 100 / self._str_total)) if self._str_total else None))
         self.str_worker.done.connect(lambda p, u: (
             self._log(f"✅ 强化完成：处理 {p:,} 条，更新 {u:,} 条，用时 {self._fmt_elapsed()}"),
             self.pb_str.setValue(100),
-            self.lbl_task.setText(f"任务进度: {p:,} / {self._str_total:,}（已完成）"),
+            self.lbl_progress.setText(f"强化进度: 含中文名 - / -"),
             self._refresh_stats(), self._str_timer.stop(), self._task_timer.stop(),
-            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False)))
+            self.btn_strengthen.setEnabled(True), self.btn_stop_str.setEnabled(False),
+            # 互斥解除
+            self.btn_conv_country.setEnabled(True),
+            self.btn_backfill_country.setEnabled(True),
+            self.btn_reset_str.setEnabled(True)))
         self.str_worker.start()
+        # 互斥锁定：转国名/反补/重置续跑 全部灰
         self.btn_strengthen.setEnabled(False)
         self.btn_stop_str.setEnabled(True)
+        self.btn_conv_country.setEnabled(False)
+        self.btn_backfill_country.setEnabled(False)
+        self.btn_reset_str.setEnabled(False)
         # 启动计时 + 任务进度刷新
         import time as _t
         self._str_start_ts = _t.time()
         self._str_done = 0
+        self._str_success = 0
         self.lbl_elapsed.setText("已运行时间: 0s")
         self._str_timer.start()
         self._task_timer.start()
 
     def _tick_task(self):
+        """每 10 秒刷新：成功/失败/含中文名进度。"""
         done = getattr(self, "_str_done", 0)
-        self.lbl_task.setText(f"任务进度: {done:,} / {self._str_total:,}")
+        success = getattr(self, "_str_success", 0)
+        failed = done - success
+        self.lbl_success.setText(f"成功爬取: {success:,} 条")
+        self.lbl_failed.setText(f"失败: {failed:,} 条")
+        # 含中文名进度（数据库实时查询）
+        try:
+            from core.tmdb_cache import TmdbCache
+            conn = TmdbCache()._get_conn()
+            total = conn.execute("SELECT COUNT(*) FROM movies").fetchone()[0]
+            with_zh = conn.execute(
+                "SELECT COUNT(*) FROM movies WHERE title_zh != '' AND title_zh IS NOT NULL"
+            ).fetchone()[0]
+            self.lbl_progress.setText(
+                f"强化进度: 含中文名 {with_zh:,} / {total:,}")
+        except Exception:
+            self.lbl_progress.setText("强化进度: 含中文名 - / -")
 
     def _tick_elapsed(self):
         import time as _t
         if self._str_start_ts:
             self.lbl_elapsed.setText(f"已运行时间: {self._fmt_elapsed()}")
 
-    def _fmt_elapsed(self):
+    def _fmt_elapsed(self, start_ts=None):
         import time as _t
-        sec = int(_t.time() - (self._str_start_ts or _t.time()))
+        base = start_ts if start_ts is not None else self._str_start_ts
+        sec = int(_t.time() - (base or _t.time()))
         h, rem = divmod(sec, 3600)
         m, s = divmod(rem, 60)
         if h:
@@ -713,6 +816,211 @@ class TmdbManager(QMainWindow):
         self._task_timer.stop()
         self.btn_strengthen.setEnabled(True)
         self.btn_stop_str.setEnabled(False)
+        # 互斥解除
+        self.btn_conv_country.setEnabled(True)
+        self.btn_backfill_country.setEnabled(True)
+        self.btn_reset_str.setEnabled(True)
+
+    def _reset_strengthen_resume(self):
+        """完全重置：清空续跑点 + 清空已强化的数据（title_zh / country / country_name / country_revised）。
+
+        下次「开始强化」所有行从零重新处理。
+        """
+        reply = QMessageBox.question(
+            self, "确认完全重置",
+            "完全重置将清空所有已强化的中文标题和国家数据\n"
+            "（title_zh / country / country_name / country_revised），\n"
+            "下次强化将从零重新处理全部 1.2M 行。\n确定继续吗？",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply != QMessageBox.Yes:
+            self._log("完全重置已取消")
+            return
+
+        from core.tmdb_cache import TmdbCache, CACHE_DIR
+        # 1) 删续跑点
+        state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
+        self._log(f"完全重置：删除续跑点 {state_path}")
+        try:
+            if os.path.exists(state_path):
+                os.remove(state_path)
+                self._log(f"✓ 续跑点已删除")
+        except Exception as e:
+            self._log(f"✗ 删除续跑点失败: {e}")
+
+        # 2) 清空数据库
+        self._log("完全重置：清空 title_zh / country / country_name / country_revised ...")
+        try:
+            cache = TmdbCache()
+            conn = cache._get_conn()
+            before = conn.execute(
+                "SELECT COUNT(*) FROM movies "
+                "WHERE title_zh != '' OR country != '' OR country_name != '' OR country_revised != ''"
+            ).fetchone()[0]
+            conn.execute(
+                "UPDATE movies SET title_zh='', country='', country_name='', country_revised=''")
+            conn.commit()
+            self._log(f"✓ 已清空 {before:,} 行的中文标题/国家数据")
+            self._refresh_stats()
+        except Exception as e:
+            self._log(f"✗ 清空数据失败: {e}")
+
+        self._log("完全重置完成，下次「开始强化」将从零开始处理全部行")
+
+
+    # ===== 数据库 / 索引 =====
+    def _refresh_index_status(self):
+        try:
+            from core.tmdb_cache import TmdbCache
+            cache = TmdbCache()
+            st = cache.index_status()
+            lines = []
+            lines.append(f"数据库路径: {cache.db_path}")
+            lines.append(f"数据行数:   {st['row_count']:,}")
+            mb = st['db_size'] // 1024 // 1024 if st['db_size'] else 0
+            lines.append(f"数据库大小: {mb} MB")
+            lines.append("─" * 32)
+            def _mark(b):
+                return "✓ 已建" if b else "✗ 缺失"
+            lines.append(f"搜索索引  idx_movies_search : {_mark(st['has_search_index'])}")
+            lines.append(f"TMDB索引  idx_movies_tmdb_id: {_mark(st['has_tmdb_id_index'])}")
+            lines.append(f"年份索引  idx_movies_year    : {_mark(st['has_year_index'])}")
+            for nm in ("idx_movies_search", "idx_movies_tmdb_id", "idx_movies_year"):
+                sz = st['index_sizes'].get(nm)
+                if sz is not None:
+                    lines.append(f"    └ {nm} 占用: {sz // 1024} KB")
+                else:
+                    lines.append(f"    └ {nm} 占用: —（本环境不可用）")
+            self.lbl_idx_status.setText("\n".join(lines))
+            # 数据库信息（列结构）
+            cols = cache._get_conn().execute("PRAGMA table_info(movies)").fetchall()
+            col_names = ", ".join(c[1] for c in cols)
+            self.lbl_db_info.setText(
+                f"表 movies 列数: {len(cols)}\n"
+                f"全部索引: {', '.join(st['indexes']) if st['indexes'] else '（无）'}\n"
+                f"列: {col_names}"
+            )
+            if not st['has_search_index']:
+                self._log("⚠ 检测到搜索索引缺失：泛搜索会退化为全表扫描（大库极慢），"
+                          "请点「建立/重建索引」")
+        except Exception as e:
+            self.lbl_idx_status.setText(f"⚠ 读取索引状态失败: {e}")
+
+    def _start_build_index(self):
+        self._log_sep("建立 / 重建索引")
+        if getattr(self, "idx_worker", None) and self.idx_worker.isRunning():
+            QMessageBox.information(self, "提示", "索引构建进行中，请稍候")
+            return
+        self.idx_worker = IndexBuildWorker()
+        self.idx_worker.progress.connect(self._on_index_progress)
+        self.idx_worker.log.connect(self._log)
+        self.idx_worker.done.connect(self._on_index_done)
+        self.idx_worker.start()
+        self.btn_build_idx.setEnabled(False)
+        self.btn_refresh_idx.setEnabled(False)
+        self.lbl_idx_phase.setText("状态: 构建中…")
+        self._idx_start_ts = time.time()
+        self.lbl_idx_elapsed.setText("已用时间: 0s")
+        self._idx_timer.start()
+
+    def _on_index_progress(self, step, total, phase):
+        self.lbl_idx_phase.setText(f"状态: {phase}（{step}/{total}）")
+
+    def _on_index_done(self, msg):
+        self._idx_timer.stop()
+        self.lbl_idx_phase.setText("状态: 完成 ✓")
+        self.lbl_idx_elapsed.setText(f"已用时间: {self._fmt_elapsed(self._idx_start_ts)}")
+        self._log(msg)
+        self.btn_build_idx.setEnabled(True)
+        self.btn_refresh_idx.setEnabled(True)
+        self._refresh_index_status()
+
+    def _tick_index_elapsed(self):
+        if self._idx_start_ts:
+            self.lbl_idx_elapsed.setText(
+                f"已用时间: {self._fmt_elapsed(self._idx_start_ts)}")
+
+
+    # ===== 数据浏览 =====
+    def _current_browse_filters(self):
+        ym = int(self.cb_browse_year.currentData() or 0)
+        zh_map = {"全部": "all", "仅含中文名": "has", "仅缺中文名": "missing"}
+        return {
+            "keyword": self.le_browse_kw.text().strip() or None,
+            "year_from": None,
+            "year_to": ym if ym else None,
+            "zh": zh_map.get(self.cb_browse_zh.currentText(), "all"),
+            "source": self.cb_browse_src.currentData() or None,
+        }
+
+    def _browse_query(self):
+        self._log_sep("数据浏览查询")
+        kw = self.le_browse_kw.text().strip()
+        self._log(f"🔍 数据浏览查询: 关键词='{kw}'")
+        self._browse_filters = self._current_browse_filters()
+        self._browse_page_no = 1
+        self._run_browse()
+
+    def _browse_page(self, delta):
+        if not getattr(self, "_browse_filters", None):
+            self._browse_query()
+            return
+        new = getattr(self, "_browse_page_no", 1) + delta
+        if new < 1:
+            return
+        self._browse_page_no = new
+        self._run_browse()
+
+    def _run_browse(self):
+        if getattr(self, "browse_worker", None) and self.browse_worker.isRunning():
+            self._log("⚠ 查询进行中，请等待完成")
+            self.btn_browse_query.setEnabled(True)
+            return
+        self.btn_browse_query.setEnabled(False)
+        self.browse_worker = DbBrowseWorker(self._browse_filters, self._browse_page_no, 200)
+        self.browse_worker.result.connect(self._on_browse_result)
+        self.browse_worker.log.connect(self._log)
+        self.browse_worker.start()
+
+    def _on_browse_result(self, rows, total, page, page_size):
+        try:
+            self.btn_browse_query.setEnabled(True)
+            pages = (total + page_size - 1) // page_size or 1
+            self.lbl_browse_page.setText(f"第 {page} / {pages} 页（共 {total:,} 行）")
+            self.tbl_browse.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                self.tbl_browse.setItem(i, 0, QTableWidgetItem(str(r.get("id") or "")))
+                self.tbl_browse.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
+                self.tbl_browse.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
+                self.tbl_browse.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
+                self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_name") or ""))
+                self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("country_revised") or ""))
+                self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("language") or ""))
+                self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("source") or ""))
+                self.tbl_browse.setItem(i, 8, QTableWidgetItem(r.get("cached_at") or ""))
+        except Exception as e:
+            import traceback
+            self.btn_browse_query.setEnabled(True)
+            self._log(f"⚠ 浏览结果显示失败: {e}")
+            self._log(traceback.format_exc())
+
+    def _browse_export(self):
+        if getattr(self, "export_worker", None) and self.export_worker.isRunning():
+            QMessageBox.information(self, "提示", "导出进行中，请稍候")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出 CSV", "tmdb_export.csv", "CSV (*.csv)")
+        if not path:
+            return
+        filters = getattr(self, "_browse_filters", None) or self._current_browse_filters()
+        self.export_worker = DbExportWorker(filters, path)
+        self.export_worker.progress.connect(
+            lambda w, t: self.pb_export.setValue(int(w * 100 / t)) if t else None)
+        self.export_worker.log.connect(self._log)
+        self.export_worker.done.connect(
+            lambda n, p: (self.pb_export.setValue(100),
+                          self._log(f"✅ 已导出 {n:,} 行到 {p}")))
+        self.pb_export.setValue(0)
+        self.export_worker.start()
 
 
 def _exc_hook(exc_type, exc_val, exc_tb):
@@ -731,6 +1039,9 @@ def _exc_hook(exc_type, exc_val, exc_tb):
 
 
 def main():
+    # 压制 Qt 字体 OpenType 警告（不影响功能）
+    import os as _os
+    _os.environ["QT_LOGGING_RULES"] = "*.font.warning=false"
     sys.excepthook = _exc_hook
     # v23.53: 全局异常捕获，崩溃时写日志方便排查
     try:
