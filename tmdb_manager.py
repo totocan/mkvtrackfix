@@ -558,8 +558,12 @@ class TmdbManager(QMainWindow):
         QMessageBox.information(self, "已保存", "TMDB API Key 已写入 config.json")
 
     def _convert_country(self):
-        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
-            QMessageBox.information(self, "提示", "转中文国名进行中，请稍候")
+        # 互斥：强化 / 反补进行中时不能跑
+        if getattr(self, "str_worker", None) and self.str_worker.isRunning():
+            QMessageBox.warning(self, "提示", "强化进行中，请先停止强化")
+            return
+        if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
+            QMessageBox.warning(self, "提示", "反补进行中，请等待完成")
             return
         self.conv_worker = ConvertCountryWorker()
         self.conv_worker.log.connect(self._log)
@@ -568,8 +572,12 @@ class TmdbManager(QMainWindow):
         self.conv_worker.start()
 
     def _backfill_country(self):
-        if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
-            QMessageBox.information(self, "提示", "反补进行中，请稍候")
+        # 互斥：强化 / 转国名进行中时不能跑
+        if getattr(self, "str_worker", None) and self.str_worker.isRunning():
+            QMessageBox.warning(self, "提示", "强化进行中，请先停止强化")
+            return
+        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
+            QMessageBox.warning(self, "提示", "转中文国名进行中，请等待完成")
             return
         self.backfill_worker = BackfillCountryWorker()
         self.backfill_worker.log.connect(self._log)
@@ -581,6 +589,13 @@ class TmdbManager(QMainWindow):
         k = self.le_apikey.text().strip() or load_config().get("tmdb_api_key", "")
         if not k:
             QMessageBox.warning(self, "提示", "请先填写并保存 TMDB API Key")
+            return
+        # 互斥：转国名 / 反补进行中时不能跑强化
+        if getattr(self, "conv_worker", None) and self.conv_worker.isRunning():
+            QMessageBox.warning(self, "提示", "转中文国名进行中，请等待完成")
+            return
+        if getattr(self, "backfill_worker", None) and self.backfill_worker.isRunning():
+            QMessageBox.warning(self, "提示", "反补国名进行中，请等待完成")
             return
         # 关键修复：断开旧 worker 的所有信号，避免前一次强化的剩余日志
         # /进度混入新运行的显示（之前会出现"强化完成"后日志还在滚的现象）

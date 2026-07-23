@@ -565,14 +565,6 @@ class TmdbCache:
                 if not country_name and country:
                     country_name = COUNTRY_MAP.get(country.upper(), "")
                 if title_zh or country_name:
-                    # 已有中文国名 → 不覆盖（保留本地转好的中文）
-                    if country_name:
-                        existing_cn = conn.execute(
-                            "SELECT country_name FROM movies WHERE id=?",
-                            (mid,)).fetchone()
-                        existing_cn = existing_cn[0] if existing_cn else ""
-                        if existing_cn in _ZH_VALUES:
-                            country_name = existing_cn
                     conn.execute("""
                         UPDATE movies SET title_zh=?, country=?, country_name=?,
                         tmdb_id=?, updated_at=? WHERE id=?
