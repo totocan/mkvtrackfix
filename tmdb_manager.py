@@ -473,9 +473,9 @@ class TmdbManager(QMainWindow):
         self.lbl_browse_page.setFont(self._mono_font)
         bl.addWidget(self.lbl_browse_page)
         self.tbl_browse = QTableWidget()
-        self.tbl_browse.setColumnCount(8)
+        self.tbl_browse.setColumnCount(9)
         self.tbl_browse.setHorizontalHeaderLabels(
-            ["ID", "英文标题", "中文标题", "年份", "国家（修订）", "语言", "来源", "缓存时间"])
+            ["ID", "英文标题", "中文标题", "年份", "国家（原始）", "国家（修订）", "语言", "来源", "缓存时间"])
         self.tbl_browse.horizontalHeader().setStretchLastSection(True)
         self.tbl_browse.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_browse.setMinimumHeight(280)
@@ -812,10 +812,11 @@ class TmdbManager(QMainWindow):
                 self.tbl_browse.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
                 self.tbl_browse.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
                 self.tbl_browse.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
-                self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_revised") or ""))
-                self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
-                self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("source") or ""))
-                self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("cached_at") or ""))
+                self.tbl_browse.setItem(i, 4, QTableWidgetItem(r.get("country_name") or ""))
+                self.tbl_browse.setItem(i, 5, QTableWidgetItem(r.get("country_revised") or ""))
+                self.tbl_browse.setItem(i, 6, QTableWidgetItem(r.get("language") or ""))
+                self.tbl_browse.setItem(i, 7, QTableWidgetItem(r.get("source") or ""))
+                self.tbl_browse.setItem(i, 8, QTableWidgetItem(r.get("cached_at") or ""))
         except Exception as e:
             import traceback
             self.btn_browse_query.setEnabled(True)

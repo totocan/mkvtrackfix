@@ -863,7 +863,8 @@ class TmdbCache:
         conn = self._get_conn()
         total = conn.execute(f"SELECT COUNT(*) FROM movies {where}", params).fetchone()[0]
         off = max(0, (page - 1) * page_size)
-        cols = ("id", "title_en", "title_zh", "year", "country_revised",
+        cols = ("id", "title_en", "title_zh", "year",
+                "country_name", "country_revised",
                 "language", "source", "cached_at")
         sql = (f"SELECT {', '.join(cols)} FROM movies {where} "
                f"ORDER BY id LIMIT ? OFFSET ?")
