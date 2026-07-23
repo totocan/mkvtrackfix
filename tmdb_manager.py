@@ -283,8 +283,22 @@ class TmdbManager(QMainWindow):
         self._mono_font = QFont("Consolas", max(9, size - 1))
         self.setFont(self._ui_font)
 
+        # ── 三区域垂直布局：监视器 + 标签页 + 日志 ──
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_vl = QVBoxLayout(central)
+        main_vl.setContentsMargins(4, 2, 4, 2)
+        main_vl.setSpacing(4)
+
+        # 上区：系统资源监视器（跨标签共享）
+        from gui.sys_widget import SysMonitorWidget
+        self._mon = SysMonitorWidget()
+        self._mon.setFixedHeight(52)
+        main_vl.addWidget(self._mon)
+
+        # 中区：标签页（全宽，无右侧日志）
         tabs = QTabWidget()
-        self.setCentralWidget(tabs)
+        main_vl.addWidget(tabs, 1)
 
         # ===== 标签页1: 概览 + 初始化（合并） =====
         tab_overview = QWidget()
@@ -320,10 +334,7 @@ class TmdbManager(QMainWindow):
         self.progress_bar = QProgressBar()
         vl.addWidget(self.progress_bar)
         vl.addStretch()
-        self._log_widgets = []
-        splitter1, log1 = self._make_log_splitter(tab_overview)
-        self._log_widgets.append(log1)
-        tabs.addTab(splitter1, "概览 / 初始化")
+        tabs.addTab(tab_overview, "概览 / 初始化")
 
         # ===== 标签页5: 自动强化 =====
         tab_str = QWidget()
@@ -382,9 +393,7 @@ class TmdbManager(QMainWindow):
         xl.addWidget(QLabel("说明：强化只补 title_zh / country_name，不依赖主界面扫描，"
                             "可挂机后台运行。"))
         xl.addStretch()
-        splitter2, log2 = self._make_log_splitter(tab_str)
-        self._log_widgets.append(log2)
-        tabs.addTab(splitter2, "🕷 自动强化")
+        tabs.addTab(tab_str, "🕷 自动强化")
         # 强化计时器（每秒刷新已运行时间）
         from PyQt5.QtCore import QTimer
         self._str_start_ts = 0
@@ -487,9 +496,7 @@ class TmdbManager(QMainWindow):
         bl.addWidget(self.pb_export)
         dl.addWidget(gb_browse, 1)
 
-        splitter3, log3 = self._make_log_splitter(tab_db)
-        self._log_widgets.append(log3)
-        tabs.addTab(splitter3, "🗄 数据库")
+        tabs.addTab(tab_db, "🗄 数据库")
 
         # 索引构建计时器（每秒刷新已用时间）
         self._idx_start_ts = 0
@@ -497,36 +504,17 @@ class TmdbManager(QMainWindow):
         self._idx_timer.setInterval(1000)
         self._idx_timer.timeout.connect(self._tick_index_elapsed)
 
+        # 下区：共享日志（跨标签，底部）
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setFont(self._mono_font)
+        self.log.setMinimumHeight(130)
+        main_vl.addWidget(self.log)
+
         self._refresh_stats()
 
-
-    def _make_log_splitter(self, content_widget):
-        """把内容控件和日志 QTextEdit 用一个 QSplitter(6:4) 包起来。"""
-        from PyQt5.QtCore import Qt as _qt
-        splitter = QSplitter(_qt.Horizontal)
-        splitter.addWidget(content_widget)
-        log = QTextEdit()
-        log.setReadOnly(True)
-        log.setFont(self._mono_font)
-        log.setMinimumWidth(180)
-        log.setLineWrapMode(QTextEdit.WidgetWidth)
-        splitter.addWidget(log)
-        splitter.setStretchFactor(0, 6)
-        splitter.setStretchFactor(1, 4)
-        # 窗口显示后设一次 6:4 初始比例
-        from PyQt5.QtCore import QTimer as _qtimer
-        _qtimer.singleShot(0, lambda: self._fit_splitter(splitter))
-        return splitter, log
-
-    def _fit_splitter(self, splitter):
-        """按窗口当前宽度设 splitter 6:4 初始比例。"""
-        w = splitter.width()
-        if w > 100:
-            splitter.setSizes([int(w * 0.6), int(w * 0.4)])
-
     def _log(self, msg):
-        for lw in self._log_widgets:
-            lw.append(msg)
+        self.log.append(msg)
         try:
             _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
             os.makedirs(os.path.dirname(_lp), exist_ok=True)
