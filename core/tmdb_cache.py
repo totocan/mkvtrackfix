@@ -180,15 +180,19 @@ class TmdbCache:
             CREATE INDEX IF NOT EXISTS idx_movies_search ON movies(search_key COLLATE NOCASE);
             CREATE INDEX IF NOT EXISTS idx_movies_tmdb_id ON movies(tmdb_id);
             CREATE INDEX IF NOT EXISTS idx_movies_year ON movies(year);
-            -- v23.56: 老库自动加 country_revised 列
-            BEGIN;
-            SELECT CASE WHEN (SELECT COUNT(*) FROM pragma_table_info('movies') WHERE name='country_revised') = 0
-                        THEN (ALTER TABLE movies ADD COLUMN country_revised TEXT) END;
-            COMMIT;
             CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);
             INSERT INTO schema_version (version)
             SELECT {v} WHERE NOT EXISTS (SELECT 1 FROM schema_version);
         """.format(v=_SCHEMA_VERSION))
+        # v23.56: 老库自动加 country_revised 列（executescript 不支持条件 ALTER，另行处理）
+        try:
+            has_cr = conn.execute(
+                "SELECT COUNT(*) FROM pragma_table_info('movies') WHERE name='country_revised'"
+            ).fetchone()[0]
+            if has_cr == 0:
+                conn.execute("ALTER TABLE movies ADD COLUMN country_revised TEXT")
+        except Exception:
+            pass
         # 收集统计信息，让查询优化器为索引选择更准确（v23.55：老库打开自动补）
         try:
             conn.execute("ANALYZE")
