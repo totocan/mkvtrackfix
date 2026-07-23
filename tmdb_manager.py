@@ -319,6 +319,7 @@ class DbBrowseWorker(QThread):
             self.result.emit(rows, total, self.page, self.page_size)
         except Exception as e:
             self.log.emit(f"浏览查询失败: {e}")
+            self.result.emit([], 0, self.page, self.page_size)
 
 
 class DbExportWorker(QThread):
@@ -593,18 +594,11 @@ class TmdbManager(QMainWindow):
         self.le_browse_kw = QLineEdit()
         self.le_browse_kw.setPlaceholderText("标题包含（中/英文均可）")
         ff.addRow("关键词:", self.le_browse_kw)
-        hb_y = QHBoxLayout()
-        self.sp_year_from = QSpinBox()
-        self.sp_year_from.setRange(0, 3000)
-        self.sp_year_from.setValue(0)
-        self.sp_year_to = QSpinBox()
-        self.sp_year_to.setRange(0, 3000)
-        self.sp_year_to.setValue(3000)
-        hb_y.addWidget(QLabel("从"))
-        hb_y.addWidget(self.sp_year_from)
-        hb_y.addWidget(QLabel("到"))
-        hb_y.addWidget(self.sp_year_to)
-        ff.addRow("年份:", hb_y)
+        self.cb_browse_year = QComboBox()
+        self.cb_browse_year.addItem("全部年份", 0)
+        for y in [2030, 2025, 2020, 2015] + list(range(2010, 1909, -10)):
+            self.cb_browse_year.addItem(f"{y}年以前", y)
+        ff.addRow("年份:", self.cb_browse_year)
         self.cb_browse_zh = QComboBox()
         self.cb_browse_zh.addItems(["全部", "仅含中文名", "仅缺中文名"])
         ff.addRow("中文名:", self.cb_browse_zh)
@@ -911,6 +905,8 @@ class TmdbManager(QMainWindow):
                 sz = st['index_sizes'].get(nm)
                 if sz is not None:
                     lines.append(f"    └ {nm} 占用: {sz // 1024} KB")
+                else:
+                    lines.append(f"    └ {nm} 占用: —（本环境不可用）")
             self.lbl_idx_status.setText("\n".join(lines))
             # 数据库信息（列结构）
             cols = cache._get_conn().execute("PRAGMA table_info(movies)").fetchall()
@@ -965,17 +961,12 @@ class TmdbManager(QMainWindow):
 
     # ===== 数据浏览 =====
     def _current_browse_filters(self):
-        yf = self.sp_year_from.value() or None
-        yt = self.sp_year_to.value() or None
-        if yf == 0:
-            yf = None
-        if yt == 3000:
-            yt = None
+        ym = int(self.cb_browse_year.currentData() or 0)
         zh_map = {"全部": "all", "仅含中文名": "has", "仅缺中文名": "missing"}
         return {
             "keyword": self.le_browse_kw.text().strip() or None,
-            "year_from": yf,
-            "year_to": yt,
+            "year_from": None,
+            "year_to": ym if ym else None,
             "zh": zh_map.get(self.cb_browse_zh.currentText(), "all"),
             "source": self.cb_browse_src.currentData() or None,
         }
@@ -996,11 +987,15 @@ class TmdbManager(QMainWindow):
         self._run_browse()
 
     def _run_browse(self):
+        if getattr(self, "browse_worker", None) and self.browse_worker.isRunning():
+            self._log("⚠ 查询进行中，请等待完成")
+            self.btn_browse_query.setEnabled(True)
+            return
         self.btn_browse_query.setEnabled(False)
-        w = DbBrowseWorker(self._browse_filters, self._browse_page_no, 200)
-        w.result.connect(self._on_browse_result)
-        w.log.connect(self._log)
-        w.start()
+        self.browse_worker = DbBrowseWorker(self._browse_filters, self._browse_page_no, 200)
+        self.browse_worker.result.connect(self._on_browse_result)
+        self.browse_worker.log.connect(self._log)
+        self.browse_worker.start()
 
     def _on_browse_result(self, rows, total, page, page_size):
         self.btn_browse_query.setEnabled(True)
