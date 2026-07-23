@@ -475,7 +475,7 @@ class TmdbManager(QMainWindow):
         self.tbl_browse = QTableWidget()
         self.tbl_browse.setColumnCount(8)
         self.tbl_browse.setHorizontalHeaderLabels(
-            ["ID", "英文标题", "中文标题", "年份", "国家", "语言", "来源", "缓存时间"])
+            ["ID", "英文标题", "中文标题", "年份", "国家（修订）", "语言", "来源", "缓存时间"])
         self.tbl_browse.horizontalHeader().setStretchLastSection(True)
         self.tbl_browse.setEditTriggers(QTableWidget.NoEditTriggers)
         self.tbl_browse.setMinimumHeight(280)
