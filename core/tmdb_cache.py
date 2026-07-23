@@ -316,13 +316,15 @@ class TmdbCache:
         return done
 
     def strengthen_missing(self, api_key, interval=20, stop_check=None,
-                           on_log=None, on_progress=None, batch_limit=0):
+                           on_log=None, on_progress=None, batch_limit=0,
+                           start_after_id=0):
         """自动强化（v23.54 新增，v23.55 支持高速档+429退避）：TMDB API 批量补中文名。
 
         - interval 为「每条间隔秒数」，支持小数（0.02 ≈ 50条/秒）
         - 遇 HTTP 429（限流）自动退避：等待 Retry-After 或 5 秒后重试，不中断
         - stop_check 返回 True 时中止；on_log/on_progress 回调
-        返回 (processed, updated)。
+        - start_after_id：续跑起点（id > 该值），用于断点续传
+        返回 (processed, updated, last_id)。
         """
         import requests
         import time
@@ -350,18 +352,23 @@ class TmdbCache:
                 return resp
             return None
 
-        sql = "SELECT id, title_en, year FROM movies WHERE title_zh = '' AND title_en != ''"
+        # 断点续传：从 start_after_id 之后开始；ORDER BY id 保证确定性顺序
+        sql = ("SELECT id, title_en, year FROM movies "
+               "WHERE title_zh = '' AND title_en != '' AND id > ? "
+               "ORDER BY id")
         if batch_limit:
             sql += f" LIMIT {int(batch_limit)}"
-        todo = conn.execute(sql).fetchall()
+        todo = conn.execute(sql, (start_after_id,)).fetchall()
         total = len(todo)
         processed = updated = 0
+        last_id = start_after_id
         for r in todo:
             if stop_check and stop_check():
                 if on_log:
                     on_log("⏹ 收到停止信号，中止强化。")
                 break
             mid_title, myear, mid = r["title_en"], r["year"], r["id"]
+            last_id = mid
             try:
                 s_url = "https://api.themoviedb.org/3/search/movie"
                 params = {"api_key": api_key, "query": mid_title,
@@ -426,7 +433,7 @@ class TmdbCache:
             if on_progress:
                 on_progress(processed, total, updated)
             time.sleep(interval)
-        return processed, updated
+        return processed, updated, last_id
 
     def save(self, title, year, data):
         """保存一条 TMDB 查询结果到缓存。data 为 dict"""

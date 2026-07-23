@@ -220,26 +220,36 @@ class StrengthenWorker(QThread):
     progress = pyqtSignal(int, int, int)  # processed, total, updated
     done = pyqtSignal(int, int)
 
-    def __init__(self, api_key, interval, batch_limit=0):
+    def __init__(self, api_key, interval, batch_limit=0, start_after_id=0):
         super().__init__()
         self.api_key = api_key
         self.interval = interval
         self.batch_limit = batch_limit
+        self.start_after_id = start_after_id
         self._stop = False
 
     def stop(self):
         self._stop = True
 
     def run(self):
-        from core.tmdb_cache import TmdbCache
+        from core.tmdb_cache import TmdbCache, CACHE_DIR
+        import json
         cache = TmdbCache()
+        state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
         try:
-            processed, updated = cache.strengthen_missing(
+            processed, updated, last_id = cache.strengthen_missing(
                 self.api_key, interval=self.interval,
                 stop_check=lambda: self._stop,
                 on_log=lambda m: self.log.emit(m),
                 on_progress=lambda p, t, u: self.progress.emit(p, t, u),
-                batch_limit=self.batch_limit)
+                batch_limit=self.batch_limit,
+                start_after_id=self.start_after_id)
+            # 落盘续跑点（停止或完成都记录）
+            try:
+                with open(state_path, "w", encoding="utf-8") as f:
+                    json.dump({"last_id": last_id}, f)
+            except Exception:
+                pass
             self.done.emit(processed, updated)
         except Exception as e:
             self.log.emit(f"强化异常: {e}")
@@ -254,12 +264,44 @@ class ConvertCountryWorker(QThread):
         super().__init__()
 
     def run(self):
-        from core.tmdb_cache import TmdbCache
+        from core.tmdb_cache import TmdbCache, COUNTRY_MAP
         try:
             cache = TmdbCache()
             self.log.emit("🌐 开始转中文国名（ISO→中文静态映射）...")
             n = cache.apply_country_names()
             self.log.emit(f"✅ 已补齐中文国名 {n:,} 条")
+            # 诊断：解释「待补 N 行但只更新 0 行」的原因
+            try:
+                conn = cache._get_conn()
+                total_match = conn.execute(
+                    "SELECT COUNT(*) FROM movies "
+                    "WHERE IFNULL(country_name,'') = '' AND IFNULL(country,'') != ''"
+                ).fetchone()[0]
+                if total_match == 0:
+                    self.log.emit("   诊断：没有「有 country 但无 country_name」的待补行")
+                    self.log.emit("     （要么已全部补齐，要么 Kaggle 导入时 production_countries 没拿到 country）")
+                elif n == 0:
+                    self.log.emit(f"   诊断：仍待补 {total_match:,} 行，但本次更新 0")
+                    if COUNTRY_MAP:
+                        placeholders = ",".join("?" * len(COUNTRY_MAP))
+                        cur = conn.execute(
+                            f"SELECT country, COUNT(*) c FROM movies "
+                            f"WHERE IFNULL(country_name,'') = '' "
+                            f"AND IFNULL(country,'') != '' "
+                            f"AND country NOT IN ({placeholders}) "
+                            f"GROUP BY country ORDER BY c DESC LIMIT 5",
+                            list(COUNTRY_MAP.keys()),
+                        )
+                        rows = cur.fetchall()
+                        if rows:
+                            self.log.emit("   不在 COUNTRY_MAP 的 ISO 码 TOP5：")
+                            for code, c in rows:
+                                self.log.emit(f"     · {code}: {c:,} 行")
+                        else:
+                            self.log.emit("   所有待补 ISO 码都在 COUNTRY_MAP 内（异常，请检查 COUNTRY_MAP）")
+                    self.log.emit("   如需补全，编辑 core/tmdb_cache.py 的 COUNTRY_MAP 加码")
+            except Exception as e:
+                self.log.emit(f"   诊断查询失败: {e}")
             self.done.emit(n)
         except Exception as e:
             self.log.emit(f"转国名异常: {e}")
@@ -523,6 +565,10 @@ class TmdbManager(QMainWindow):
         self.btn_stop_str.clicked.connect(self._stop_strengthen)
         self.btn_stop_str.setEnabled(False)
         hb_x.addWidget(self.btn_stop_str)
+        self.btn_reset_str = QPushButton("↺ 重置续跑")
+        self.btn_reset_str.setToolTip("清空续跑点，下次强化从头开始")
+        self.btn_reset_str.clicked.connect(self._reset_strengthen_resume)
+        hb_x.addWidget(self.btn_reset_str)
         xl.addLayout(hb_x)
         self.pb_str = QProgressBar()
         xl.addWidget(self.pb_str)
@@ -828,17 +874,31 @@ class TmdbManager(QMainWindow):
             except (TypeError, RuntimeError):
                 pass
         interval = float(self.cb_interval.currentData() or 20)
-        # 开始前固定读取待补总数（分母固定，不再变动）
-        from core.tmdb_cache import TmdbCache
+        # 断点续读：读 state 文件，拿到上次的 last_id 作为本次起点
+        from core.tmdb_cache import TmdbCache, CACHE_DIR
+        import json as _json
+        state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
+        start_after_id = 0
+        try:
+            if os.path.exists(state_path):
+                with open(state_path, "r", encoding="utf-8") as _f:
+                    start_after_id = int(_json.load(_f).get("last_id", 0) or 0)
+        except Exception:
+            start_after_id = 0
+        if start_after_id:
+            self._log(f"📌 续跑模式：从 id>{start_after_id:,} 开始（清空续跑点：点「重置续跑」按钮）")
+        # 待补总数也按续跑点算，避免分母虚高
         try:
             self._str_total = TmdbCache()._get_conn().execute(
-                "SELECT COUNT(*) FROM movies WHERE title_zh = '' AND title_en != ''"
+                "SELECT COUNT(*) FROM movies "
+                "WHERE title_zh = '' AND title_en != '' AND id > ?",
+                (start_after_id,),
             ).fetchone()[0]
         except Exception:
             self._str_total = 0
         self.lbl_task.setText(f"任务进度: 0 / {self._str_total:,}")
         self.pb_str.setValue(0)
-        self.str_worker = StrengthenWorker(k, interval)
+        self.str_worker = StrengthenWorker(k, interval, start_after_id=start_after_id)
         self.str_worker.log.connect(self._log)
         self.str_worker.progress.connect(
             lambda p, t, u: (setattr(self, "_str_done", p),
@@ -892,6 +952,19 @@ class TmdbManager(QMainWindow):
         self._task_timer.stop()
         self.btn_strengthen.setEnabled(True)
         self.btn_stop_str.setEnabled(False)
+
+    def _reset_strengthen_resume(self):
+        """清空续跑点，下次强化从首条未完成记录开始。"""
+        from core.tmdb_cache import CACHE_DIR
+        state_path = os.path.join(CACHE_DIR, "strengthen_resume.json")
+        try:
+            if os.path.exists(state_path):
+                os.remove(state_path)
+                self._log("↺ 已清空续跑点，下次「开始强化」将从头开始")
+            else:
+                self._log("↺ 续跑点本就不存在，无需重置")
+        except Exception as e:
+            self._log(f"重置续跑点失败: {e}")
 
 
     # ===== 数据库 / 索引 =====
