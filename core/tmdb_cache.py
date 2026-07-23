@@ -406,16 +406,19 @@ class TmdbCache:
             cid = r["id"]
             country = (r["country"] or "").strip()
             language = (r["language"] or "").strip()
+            cn = ""
+            tried_key = None
             if country:
                 cn = COUNTRY_MAP.get(country.upper(), "")
-                key = country if not cn else None
-            elif language:
+                if not cn:
+                    tried_key = country
+            if not cn and language:
                 cn = LANGUAGE_MAP.get(language.lower(), "")
-                key = language if not cn else None
-            else:
-                continue
+                if not cn:
+                    tried_key = language
             if not cn:
-                unmatched[key] = unmatched.get(key, 0) + 1
+                if tried_key:
+                    unmatched[tried_key] = unmatched.get(tried_key, 0) + 1
                 continue
             conn.execute("UPDATE movies SET country_revised=? WHERE id=?",
                          (cn, cid))
