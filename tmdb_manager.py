@@ -545,6 +545,20 @@ class TmdbManager(QMainWindow):
         self._idx_timer.setInterval(1000)
         self._idx_timer.timeout.connect(self._tick_index_elapsed)
 
+        # 下区：共享日志（概览 / 数据库标签页用）
+        self.log = QTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMinimumHeight(220)
+        self.log.setStyleSheet("""
+            QTextEdit {
+                background-color: #0a0a0a;
+                color: #e0e0e0;
+                border: 1px solid #333;
+            }
+        """)
+        self.log.setFont(self._mono_font)
+        main_vl.addWidget(self.log)
+
         self._refresh_stats()
 
     def _log_html(self, msg):
@@ -594,12 +608,17 @@ class TmdbManager(QMainWindow):
     def _log(self, msg):
         html = self._log_html(msg)
         from PyQt5.QtGui import QTextCursor
-        # 写入强化标签页专属日志（强化页自带日志会延伸到底部）
-        if hasattr(self, "_str_log"):
+        # 写入底部共享日志（概览/数据库标签页用）
+        self.log.moveCursor(QTextCursor.End)
+        self.log.insertHtml(html + "<br>")
+        sb = self.log.verticalScrollBar()
+        sb.setValue(sb.maximum())
+        # 写入强化标签页内专属日志
+        if getattr(self, "_str_log", None):
             self._str_log.moveCursor(QTextCursor.End)
             self._str_log.insertHtml(html + "<br>")
-            sb = self._str_log.verticalScrollBar()
-            sb.setValue(sb.maximum())
+            sb2 = self._str_log.verticalScrollBar()
+            sb2.setValue(sb2.maximum())
         # 文件日志（纯文本）
         try:
             _lp = os.path.join(_APP_ROOT, "logs", "tmdb_manager.log")
