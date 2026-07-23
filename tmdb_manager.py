@@ -77,143 +77,6 @@ class ImportWorker(QThread):
         self.finished.emit(total)
 
 
-class ScanWorker(QThread):
-    log = pyqtSignal(str)
-    done = pyqtSignal(int)
-
-    def __init__(self, directory, recursive, interval):
-        super().__init__()
-        self.directory = directory
-        self.recursive = recursive
-        self.interval = interval
-        self._stop = False
-
-    def stop(self):
-        self._stop = True
-
-    def run(self):
-        from core.tmdb_cache import TmdbCache
-        import requests
-        import re
-        cache = TmdbCache()
-        processed = set()
-        count = 0
-        while not self._stop:
-            files = []
-            if self.recursive:
-                for root, dirs, fnames in os.walk(self.directory):
-                    for f in fnames:
-                        if f.lower().endswith(('.mkv', '.mp4')):
-                            files.append(os.path.join(root, f))
-            else:
-                for f in os.listdir(self.directory):
-                    if f.lower().endswith(('.mkv', '.mp4')):
-                        files.append(os.path.join(self.directory, f))
-            new_files = [f for f in files if f not in processed]
-            for f in new_files:
-                if self._stop:
-                    return
-                title, year = self._extract_info(f)
-                if not title:
-                    processed.add(f)
-                    continue
-                cached = cache.lookup(title, year)
-                if cached:
-                    processed.add(f)
-                    continue
-                self.log.emit(f"查: {title} ({year})...")
-                result = self._query_tmdb(title, year)
-                if result:
-                    cache.save(title, year, result)
-                    self.log.emit(f"  ✓ 已缓存")
-                    count += 1
-                else:
-                    self.log.emit(f"  ✗ 无结果")
-                processed.add(f)
-                time.sleep(1.5)
-            if not self.interval:
-                break
-            for _ in range(self.interval * 60):
-                if self._stop:
-                    return
-                time.sleep(1)
-        self.done.emit(count)
-
-    def _extract_info(self, path):
-        base = os.path.splitext(os.path.basename(path))[0]
-        m = re.search(r'[.\(]\s*(\d{4})\s*[.\)]', base)
-        year = int(m.group(1)) if m else None
-        if m:
-            title = base[:m.start()].replace('.', ' ').replace('_', ' ').strip()
-        else:
-            title = base.replace('.', ' ').replace('_', ' ').strip()
-        for suffix in ['bluray', 'web dl', 'webrip', 'hdrip', 'x264', 'x265',
-                       'h264', 'h265', '10bit', '2audio', 'remux', '2160p',
-                       '1080p', '720p', 'dts', 'ac3', 'aac', 'flac']:
-            title = re.sub(r'\b' + suffix + r'\b', '', title, flags=re.IGNORECASE)
-        title = ' '.join(title.split()).strip()
-        return title, year
-
-    def _query_tmdb(self, title, year):
-        try:
-            import requests
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Accept-Language': 'zh-CN,zh;q=0.9',
-            }
-            url = f"https://www.themoviedb.org/search?query={requests.utils.quote(title)}"
-            resp = requests.get(url, headers=headers, timeout=15)
-            if resp.status_code != 200:
-                return None
-            mids = re.findall(r'/movie/(\d+)', resp.text)
-            if not mids:
-                return None
-            movie_id = mids[0]
-            url2 = f"https://www.themoviedb.org/movie/{movie_id}"
-            resp2 = requests.get(url2, headers=headers, timeout=15)
-            if resp2.status_code != 200:
-                return None
-            text = resp2.text
-            country = re.search(r'data-country-code="([^"]+)"', text)
-            lang = re.search(r'data-original-language="([^"]+)"', text)
-            title_zh_m = re.search(r'class="title"[^>]*>([^<]+)<', text)
-            return {
-                "title_en": title, "title_zh": title_zh_m.group(1).strip() if title_zh_m else "",
-                "country": country.group(1) if country else "",
-                "language": lang.group(1) if lang else "",
-                "tmdb_id": int(movie_id),
-                "source": "tmdb",
-            }
-        except Exception:
-            return None
-
-
-class BroadSearchWorker(QThread):
-    """泛搜索（分级+分页），后台执行避免大库卡 UI。"""
-    result = pyqtSignal(dict)
-    log = pyqtSignal(str)
-
-    def __init__(self, title, year, year_max, country, genre, page, page_size=100):
-        super().__init__()
-        self.title = title
-        self.year = year
-        self.year_max = year_max
-        self.country = country
-        self.genre = genre
-        self.page = page
-        self.page_size = page_size
-
-    def run(self):
-        from core.tmdb_cache import TmdbCache
-        cache = TmdbCache()
-        try:
-            res = cache.search_broad(self.title, self.year, self.year_max,
-                                     self.country, self.genre, self.page, self.page_size)
-            self.result.emit(res)
-        except Exception as e:
-            self.log.emit(f"搜索失败: {e}")
-
-
 class StrengthenWorker(QThread):
     """自动强化：TMDB API 批量补 title_zh + country_name（v23.54 新增）。"""
     log = pyqtSignal(str)
@@ -324,18 +187,6 @@ class BackfillCountryWorker(QThread):
             self.log.emit(f"反补国名异常: {e}")
 
 
-class GenreLoadWorker(QThread):
-    """后台加载类型列表（避免大库 distinct_genres 卡 UI）。"""
-    loaded = pyqtSignal(list)
-
-    def run(self):
-        from core.tmdb_cache import TmdbCache
-        try:
-            genres = TmdbCache().distinct_genres()
-            self.loaded.emit(genres)
-        except Exception:
-            self.loaded.emit([])
-
 
 class IndexBuildWorker(QThread):
     """手动（重建）索引，后台执行避免大库卡 UI。"""
@@ -431,22 +282,26 @@ class TmdbManager(QMainWindow):
         tabs = QTabWidget()
         self.setCentralWidget(tabs)
 
-        # ===== 标签页1: 概览 =====
+        # ===== 标签页1: 概览 + 初始化（合并） =====
         tab_overview = QWidget()
         vl = QVBoxLayout(tab_overview)
+        # 上区：统计概览
         self.lbl_stats = QLabel("点击「刷新统计」查看缓存状态")
         self.lbl_stats.setFont(self._mono_font)
         self.lbl_stats.setWordWrap(True)
         vl.addWidget(self.lbl_stats)
+        hb_top = QHBoxLayout()
         btn_refresh = QPushButton("🔄 刷新统计")
         btn_refresh.clicked.connect(self._refresh_stats)
-        vl.addWidget(btn_refresh)
-        vl.addStretch()
-        tabs.addTab(tab_overview, "概览")
-
-        # ===== 标签页2: 初始化 =====
-        tab_init = QWidget()
-        vl2 = QVBoxLayout(tab_init)
+        hb_top.addWidget(btn_refresh)
+        hb_top.addStretch()
+        vl.addLayout(hb_top)
+        # 分隔
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        vl.addWidget(line)
+        # 下区：CSV 导入初始化
         link = QLabel(
             '<a href="https://www.kaggle.com/datasets/alanvourch/tmdb-movies-daily-updates">'
             '📥 打开 Kaggle 数据集下载页面</a><br>'
@@ -454,95 +309,14 @@ class TmdbManager(QMainWindow):
         link.setOpenExternalLinks(True)
         link.setWordWrap(True)
         link.setStyleSheet("font-size:12pt; padding:8px;")
-        vl2.addWidget(link)
+        vl.addWidget(link)
         btn_sel = QPushButton("📁 选择 CSV 文件并导入")
         btn_sel.clicked.connect(self._import_csv)
-        vl2.addWidget(btn_sel)
+        vl.addWidget(btn_sel)
         self.progress_bar = QProgressBar()
-        vl2.addWidget(self.progress_bar)
-        tabs.addTab(tab_init, "初始化")
-
-        # ===== 标签页3: 预拉取 =====
-        tab_scan = QWidget()
-        vl3 = QVBoxLayout(tab_scan)
-        f3 = QFormLayout()
-        self.le_dir = QLineEdit()
-        self.le_dir.setPlaceholderText(r"\\NAS\影视\电影 或 D:\Movies")
-        btn_browse = QPushButton("浏览...")
-        btn_browse.clicked.connect(lambda: self.le_dir.setText(
-            QFileDialog.getExistingDirectory(self, "选择电影目录")))
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(self.le_dir, 1)
-        dir_row.addWidget(btn_browse)
-        f3.addRow("目录:", dir_row)
-        self.cb_recursive = QCheckBox("递归子目录")
-        self.cb_recursive.setChecked(True)
-        f3.addRow(self.cb_recursive)
-        self.sp_interval = QSpinBox()
-        self.sp_interval.setRange(0, 999)
-        self.sp_interval.setValue(30)
-        self.sp_interval.setSuffix(" 分钟(0=只扫一次)")
-        f3.addRow("后台间隔:", self.sp_interval)
-        vl3.addLayout(f3)
-        hb = QHBoxLayout()
-        self.btn_start_scan = QPushButton("▶ 开始预拉取")
-        self.btn_start_scan.clicked.connect(self._start_scan)
-        self.btn_stop_scan = QPushButton("⏹ 停止")
-        self.btn_stop_scan.clicked.connect(self._stop_scan)
-        self.btn_stop_scan.setEnabled(False)
-        hb.addWidget(self.btn_start_scan)
-        hb.addWidget(self.btn_stop_scan)
-        vl3.addLayout(hb)
-        tabs.addTab(tab_scan, "预拉取")
-
-        # ===== 标签页4: 泛搜索 =====
-        tab_search = QWidget()
-        sl = QVBoxLayout(tab_search)
-        sf = QFormLayout()
-        self.le_query = QLineEdit()
-        self.le_query.setPlaceholderText("输入电影名，可含 . 分隔，如 casino.royale.1967")
-        sf.addRow("关键词:", self.le_query)
-        # 年份下拉档位（X年以前 = year <= X），倒序：全部→2030→…→1910
-        self.cb_year = QComboBox()
-        self.cb_year.addItem("全部年份", 0)
-        for y in [2030, 2025, 2020, 2015] + list(range(2010, 1909, -10)):
-            self.cb_year.addItem(f"{y}年以前", y)
-        sf.addRow("年份:", self.cb_year)
-        self.cb_country = QLineEdit()
-        self.cb_country.setPlaceholderText("可选，国家代码或中文名，如 US / 美国")
-        sf.addRow("国家:", self.cb_country)
-        # 类型下拉初始化时不查库（避免大库卡死 UI），搜索时后台懒加载填充
-        self.cb_genre = QComboBox()
-        self.cb_genre.addItem("（全部类型）")
-        self.cb_genre.addItem("（加载中…）")
-        self._genres_loaded = False
-        sf.addRow("类型:", self.cb_genre)
-        sl.addLayout(sf)
-        hb_s = QHBoxLayout()
-        self.btn_search = QPushButton("🔍 搜索")
-        self.btn_search.clicked.connect(self._do_search)
-        hb_s.addWidget(self.btn_search)
-        hb_s.addStretch()
-        # 分页
-        self.btn_prev = QPushButton("◀ 上一页")
-        self.btn_prev.clicked.connect(lambda: self._page(-1))
-        self.btn_next = QPushButton("下一页 ▶")
-        self.btn_next.clicked.connect(lambda: self._page(1))
-        self.lbl_page = QLabel("第 0 / 0 页")
-        hb_s.addWidget(self.btn_prev)
-        hb_s.addWidget(self.lbl_page)
-        hb_s.addWidget(self.btn_next)
-        sl.addLayout(hb_s)
-        self.tbl_search = QTableWidget()
-        self.tbl_search.setColumnCount(6)
-        self.tbl_search.setHorizontalHeaderLabels(
-            ["匹配", "英文标题", "中文标题", "年份", "国家", "语言"])
-        self.tbl_search.horizontalHeader().setStretchLastSection(True)
-        self.tbl_search.setEditTriggers(QTableWidget.NoEditTriggers)
-        sl.addWidget(self.tbl_search, 1)
-        tabs.addTab(tab_search, "🔍 泛搜索")
-        self._search_page = 1
-        self._search_last = None
+        vl.addWidget(self.progress_bar)
+        vl.addStretch()
+        tabs.addTab(tab_overview, "概览 / 初始化")
 
         # ===== 标签页5: 自动强化 =====
         tab_str = QWidget()
@@ -769,96 +543,6 @@ class TmdbManager(QMainWindow):
             self, "导入完成", f"成功导入 {n:,} 条记录"))
         self.worker.finished.connect(self._refresh_stats)
         self.worker.start()
-
-    def _start_scan(self):
-        directory = self.le_dir.text().strip()
-        if not directory or not os.path.isdir(directory):
-            QMessageBox.warning(self, "提示", "请选择有效的电影目录")
-            return
-        self.scan_worker = ScanWorker(
-            directory, self.cb_recursive.isChecked(), self.sp_interval.value())
-        self.scan_worker.log.connect(self._log)
-        self.scan_worker.done.connect(lambda n: self._log(f"共缓存 {n} 部电影"))
-        self.scan_worker.done.connect(self._refresh_stats)
-        self.scan_worker.start()
-        self.btn_start_scan.setEnabled(False)
-        self.btn_stop_scan.setEnabled(True)
-
-    def _stop_scan(self):
-        if self.scan_worker:
-            self.scan_worker.stop()
-            self._log("已发送停止信号，等待当前查询完成...")
-        self.btn_start_scan.setEnabled(True)
-        self.btn_stop_scan.setEnabled(False)
-
-    # ===== 泛搜索 =====
-    def _do_search(self):
-        q = self.le_query.text().strip()
-        if not q:
-            QMessageBox.warning(self, "提示", "请输入关键词")
-            return
-        # 首次搜索时后台懒加载类型列表（避免初始化卡大库）
-        if not self._genres_loaded:
-            self._load_genres_async()
-        # 年份下拉：全部=0，否则为 year_max（X年以前）
-        ym = int(self.cb_year.currentData() or 0)
-        year_max = ym if ym else None
-        country = self.cb_country.text().strip() or None
-        genre = self.cb_genre.currentText()
-        genre = genre if genre and genre != "（全部类型）" else None
-        self._search_page = 1
-        self._run_search(q, None, year_max, country, genre)
-
-    def _page(self, delta):
-        if not self._search_last:
-            return
-        new = self._search_page + delta
-        if new < 1 or new > self._search_last["pages"]:
-            return
-        self._search_page = new
-        r = self._search_last
-        self._run_search_from(r["_q"], r["_year"], r["_year_max"], r["_country"], r["_genre"])
-
-    def _run_search(self, q, year, year_max, country, genre):
-        self._search_q = (q, year, year_max, country, genre)
-        self._run_search_from(q, year, year_max, country, genre)
-
-    def _run_search_from(self, q, year, year_max, country, genre):
-        self.btn_search.setEnabled(False)
-        w = BroadSearchWorker(q, year, year_max, country, genre, self._search_page, 100)
-        w.result.connect(lambda res: self._show_search(res, q, year, year_max, country, genre))
-        w.log.connect(self._log)
-        w.start()
-
-    def _load_genres_async(self):
-        """后台拉类型列表填充下拉（避免初始化同步查大库卡死）。"""
-        self._genres_loaded = True  # 标记已触发，避免重复
-        self.gw = GenreLoadWorker()
-        self.gw.loaded.connect(self._on_genres_loaded)
-        self.gw.start()
-
-    def _on_genres_loaded(self, genres):
-        self.cb_genre.clear()
-        self.cb_genre.addItem("（全部类型）")
-        self.cb_genre.addItems(genres)
-        self._log(f"📂 类型列表已加载：{len(genres)} 种")
-
-    def _show_search(self, res, q, year, year_max, country, genre):
-        self.btn_search.setEnabled(True)
-        self._search_last = dict(res)
-        self._search_last.update(_q=q, _year=year, _year_max=year_max,
-                                  _country=country, _genre=genre)
-        self.lbl_page.setText(f"第 {res['page']} / {res['pages']} 页（共 {res['total']} 条）")
-        self.tbl_search.setRowCount(len(res["rows"]))
-        for i, r in enumerate(res["rows"]):
-            lvl = r.get("level", "")
-            self.tbl_search.setItem(i, 0, QTableWidgetItem(lvl))
-            self.tbl_search.setItem(i, 1, QTableWidgetItem(r.get("title_en") or ""))
-            self.tbl_search.setItem(i, 2, QTableWidgetItem(r.get("title_zh") or ""))
-            self.tbl_search.setItem(i, 3, QTableWidgetItem(str(r.get("year") or "")))
-            self.tbl_search.setItem(i, 4, QTableWidgetItem(
-                r.get("country_name") or r.get("country") or ""))
-            self.tbl_search.setItem(i, 5, QTableWidgetItem(r.get("language") or ""))
 
     # ===== 自动强化 =====
     def _save_apikey(self):
